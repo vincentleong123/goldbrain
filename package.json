@@ -1,0 +1,15 @@
+{
+  "name": "goldbrain",
+  "version": "1.0.0",
+  "description": "Local XAUUSD trading dashboard: expert/EA/entrepreneur/AI/psychic/pattern/coach modes, M1 early-move sensing, backtests, adaptive AI.",
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "private": true,
+  "license": "MIT"
+}

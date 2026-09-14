@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GoldBrain - XAUUSD intelligence dashboard</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="logo">GB</span>
+      <div>
+        <div class="brand-name">GoldBrain</div>
+        <div class="brand-sub">XAUUSD local intelligence</div>
+      </div>
+    </div>
+
+    <div class="controls">
+      <select id="selSymbol" title="Symbol">
+        <option value="XAUUSD">XAUUSD (spot gold)</option>
+        <option value="XAUUSDm">XAUUSDm (XM micro)</option>
+      </select>
+      <select id="selTf" title="Timeframe">
+        <option value="M1" selected>M1 · 1 min</option>
+        <option value="M5">M5 · 5 min</option>
+        <option value="M15">M15 · 15 min</option>
+        <option value="H1">H1 · 1 hour</option>
+        <option value="H4">H4 · 4 hours</option>
+        <option value="D1">D1 · daily</option>
+      </select>
+      <select id="selBars" title="Bars">
+        <option value="100">100</option>
+        <option value="300" selected>300</option>
+        <option value="500">500</option>
+        <option value="1000">1000</option>
+        <option value="2000">2000</option>
+        <option value="5000">5000</option>
+      </select>
+      <button id="btnRefresh" class="btn">Refresh</button>
+      <button id="btnAuto" class="btn toggle on" title="Auto-refresh live data">Auto live</button>
+      <button id="btnClearCache" class="btn ghost" title="Clear local read-only cache">Clear cache</button>
+    </div>
+
+    <div class="account" id="accountBox" title="Account settings (stored on this PC)">
+      <label>Balance $<input id="inpBal" type="number" step="100" min="0" value="1000" /></label>
+      <label>Risk%<input id="inpRisk" type="number" step="0.25" min="0.05" max="5" value="1" /></label>
+      <label>Lev<input id="inpLev" type="number" step="50" min="20" max="1000" value="500" /></label>
+    </div>
+  </header>
+
+  <div class="statusbar" id="statusbar">
+    <div class="ticker">
+      <span id="px" class="px">--</span>
+      <span id="chg" class="chg">–</span>
+    </div>
+    <div class="meta">
+      <span class="badge" id="srcBadge">…</span>
+      <span id="sess">…</span>
+      <span id="updated">…</span>
+      <button id="btnUpload" class="btn ghost">Upload MT4/MT5 CSV</button>
+      <input type="file" id="fileCsv" accept=".csv,.txt" hidden />
+    </div>
+  </div>
+
+  <nav class="modes" id="modeTabs">
+    <button class="mode-tab active" data-mode="expert">Expert</button>
+    <button class="mode-tab" data-mode="psychicPower">Psychic Power</button>
+    <button class="mode-tab" data-mode="superman">Superman</button>
+    <button class="mode-tab" data-mode="thinkTank">Think Tank</button>
+    <button class="mode-tab" data-mode="keepGoing">Keep Going</button>
+    <button class="mode-tab" data-mode="jiaYou">Jia You 加油</button>
+  </nav>
+
+  <main class="layout">
+    <section class="stage">
+      <div class="chartwrap">
+        <canvas id="chart"></canvas>
+        <div class="cross" id="cross"></div>
+      </div>
+      <div class="subwrap">
+        <canvas id="indChart"></canvas>
+      </div>
+      <div class="eqwrap">
+        <div class="bt-head">
+          <span>Backtest - idealized result, no slippage</span>
+          <div class="strat-btns" id="stratBtns">
+            <button data-strat="trend">Trend</button>
+            <button data-strat="meanrev">Mean-revert</button>
+            <button data-strat="breakout">Breakout</button>
+            <button data-strat="hybrid">Hybrid+AI</button>
+            <button data-strat="psych" class="active">Psych Counter</button>
+          </div>
+        </div>
+        <div class="eq-flex">
+          <div class="eq-stats" id="eqStats"></div>
+          <div class="eq-chartwrap">
+            <canvas id="eqChart"></canvas>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <aside class="verdict">
+      <div class="verdict-inner" id="verdict"></div>
+    </aside>
+  </main>
+
+  <div class="modal" id="csvModal" hidden>
+    <div class="modal-box">
+      <h3>Upload MT4/MT5 CSV history</h3>
+      <p>Export from XM MT4/MT5: right-click symbol → History → Export to CSV (Date,Time,Open,High,Low,Close,Volume).</p>
+      <textarea id="csvText" rows="6" placeholder="Paste CSV content here, or use the file picker above"></textarea>
+      <div class="modal-actions">
+        <button id="btnCsvGo" class="btn">Load CSV</button>
+        <button id="btnCsvClose" class="btn ghost">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <footer class="foot">
+    Educational tool. Probabilities are model outputs, not predictions. Not financial advice.
+    Backtests are idealized (no slippage, 0.1-lot model, 0.25 pt spread). Live feeds: MT5 bridge &gt; Yahoo (GC=F futures tracks spot). Retrains on every refresh.
+  </footer>
+
+  <script src="/static/charts.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
