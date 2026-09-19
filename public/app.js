@@ -99,6 +99,7 @@
       state.mode = t.dataset.mode;
       renderModeTab();
       if (state.mode === "reasoner") {
+        if (state.chatBusy) return;
         if (!state.reasoner && state.rezConfig && state.rezConfig.configured) runReasonerNow(false);
         else if (!state.reasoner && !(state.rezConfig && state.rezConfig.configured)) loadRezConfig().then(() => renderModeTab());
         else if (state.reasoner && state.rezConfig && state.rezConfig.configured && Date.now() - rezLoadedAt > 60000) runReasonerNow(false);
@@ -167,6 +168,7 @@
     $("rezKey").value = c.configured ? "(saved)" : "";
     $("rezBase").value = c.baseURL && !/anthropic|openai/i.test(c.baseURL) ? c.baseURL : (c.baseURL || "");
     $("rezModel").value = c.model && !/gpt-4o-mini|claude-3-5-haiku/i.test(c.model) ? c.model : (c.model || "");
+    $("rezMt5").value = c.mt5Files || "";
     $("rezModal").hidden = false;
   }
 
@@ -195,6 +197,7 @@
 
     html += '<div class="rez-actions">';
     html += `<button id="btnRezThink" class="btn" ${state.rezRunning ? "disabled" : ""}>${state.rezRunning ? "Thinking…" : (rz ? "Think again" : "🧠 Think now")}</button>`;
+    html += `<button id="btnRezLearn" class="btn ghost">🎓 Learn the lingo</button>`;
     html += `<button id="btnRezSet" class="btn ghost">Settings</button>`;
     html += "</div>";
 
@@ -211,6 +214,7 @@
       if (pl.direction === "flat") {
         html += `<div class="v-summary">${esc(pl.reason && pl.reason[0] ? pl.reason.join(" · ") : "No edge found. The most profitable trade is often the one you don't take.")}</div>`;
       } else if (pl.ok) {
+        if (pl.story) html += `<div class="rez-story"><span class="rez-story-tag">the AI read</span>${esc(pl.story)}</div>`;
         html += '<div class="v-cards">';
         html += `<div class="v-card"><div class="lbl">Entry</div><div class="val">${fmt(pl.entry, 2)}</div><div class="hint">market</div></div>`;
         html += `<div class="v-card"><div class="lbl">Stop</div><div class="val">${fmt(pl.stop, 2)}</div><div class="hint">hard, structural</div></div>`;
@@ -250,11 +254,139 @@
 
     if (rz && rz.ok) html += `<div class="v-summary" style="font-size:11px">Reasoner = reasoning advisor, NOT a predictor and NOT an order sender. It writes data/reasoner-plan.json (advisory) for the EA. Verify with your own eyes. Generated ${new Date(rz.generatedAt).toLocaleTimeString()}.</div>`;
 
+    if (cfg && cfg.configured) html += chatHtml();
+
     $("verdict").innerHTML = html;
     const think = $("btnRezThink");
     if (think) think.addEventListener("click", () => runReasonerNow(true));
     const set = $("btnRezSet");
     if (set) set.addEventListener("click", openRezModal);
+    const learn = $("btnRezLearn");
+    if (learn) learn.addEventListener("click", openLearn);
+    bindChat();
+  }
+
+  // ------------------------------------------- learning deck (educational)
+  function openLearn() {
+    $("learnBody").innerHTML = learnDeckHtml();
+    $("learnModal").hidden = false;
+  }
+
+  function learnDeckHtml() {
+    const ind = (analysis && analysis.ind) || {};
+    const pl = (state.reasoner && state.reasoner.plan) || {};
+    const rows = [
+      ["ATR - the volatility ruler", `Average candle range, the market's yardstick for "normal" movement. Today it reads $${fmt(ind.atr || 0, 2)}. Stops smaller than ~0.2 ATR are just noise; moves bigger than ~1.5 ATR are a big deal.`],
+      ["Retail-pain stage", "The textbook stop zone where crowded trader positions get flushed (wicked) before price resumes. The Reasoner reads which stage gold is in right now and treats that flush distance as the real risk. That's why 'good' setups often need wide stops here."],
+      ["Conviction", `How sure this AI read is, on a 0-1 scale (${Math.round((pl.conviction || 0) * 100)}% today). It is an OPINION distilled from structure + stage + session + headlines - never a guarantee. Below ~50% the EA ignores it on purpose.`],
+      ["RR - reward/risk ratio", `How many dollars you are trying to win for every dollar you are prepared to lose (${pl.rr ? fmt(pl.rr, 2) : "n/a"} today). RR 2 means winning half the time keeps you even. The Reasoner skips setups under ~1.2.`],
+      ["Entry / Stop / Target", "The planned road map: where to get in, the hard line where the idea is objectively wrong (stop), and the realistic destination (target). The EA only fires when price is within a small drift of the planned entry."],
+      ["Invalidation", `The specific, concrete price condition that falsifies this plan today: ${esc(pl.invalidation || "see plan panel")}. Holding onto a trade past its invalidation is how good ideas become bad losses.`],
+      ["Scenario bull / base / bear", "Three honest futures for the same setup - up case, drift base case, down case - each with a trigger. It keeps the AI honest by forcing it to write the failure story before it trades, not after."],
+      ["Dominated by", "Which input had the biggest voice in this read - structure, stage, levels, session or news. All AIs quietly overweight their favourite input; naming it stops yours from lying to you."],
+    ];
+    return rows.map((r, i) => `<div class="learn-row"><b>${i + 1}. ${esc(r[0])}</b><div>${esc(r[1])}</div></div>`).join("");
+  }
+
+  // ------------------------------------------- Discovery chat (chat with the AI)
+  state.chatHist = [];
+  state.chatBusy = false;
+  let chatLive = null;
+
+  function chatHtml() {
+    let h = '<div class="chat">';
+    h += '<div class="chat-head">💬 Discovery · ask the AI teacher anything about this live snapshot</div>';
+    h += '<div id="chatOut" class="chat-out">';
+    for (const e of state.chatHist) {
+      h += `<div class="chat-row"><div class="chat-q">${esc(e.q)}</div><div class="chat-a">${esc(e.a)}</div></div>`;
+    }
+    if (chatLive) h += `<div class="chat-row live"><div class="chat-q">${esc(chatLive.q)}</div><div class="chat-a typing" id="chatLiveA">…thinking</div></div>`;
+    h += '</div>';
+    h += '<div class="chat-in"><input id="chatQ" placeholder="Ask… e.g. teach me what conviction means" autocomplete="off" /><button id="chatSend" class="btn">Ask</button></div>';
+    h += '<div class="chat-chips" id="chatChips"></div>';
+    h += '</div>';
+    return h;
+  }
+
+  function chatChips() {
+    const pl = state.reasoner && state.reasoner.plan;
+    const dir = pl && pl.direction === "long" ? "long" : (pl && pl.direction === "short" ? "short" : null);
+    const c = [
+      dir
+        ? `Explain the case FOR going ${dir} in plain words`
+        : "Explain this snapshot's structure in plain words",
+      dir
+        ? "Make the strongest argument AGAINST this plan"
+        : "What is this snapshot saying about gold right now?",
+      "What does ATR tell us about today's volatility?",
+      "Quiz me: what does each number in this panel mean?",
+      "What would make this analysis wrong? (falsification)",
+    ];
+    return c;
+  }
+
+  async function chatAsk(q) {
+    if (state.chatBusy) return;
+    state.chatBusy = true;
+    chatLive = { q, text: "" };
+    renderReasoner();
+    const liveEl = $("chatLiveA");
+    try {
+      const r = await fetch("/api/reasoner/chat", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ q }),
+      });
+      if (!r.ok) {
+        let msg = "Server " + r.status;
+        try { const j = await r.json(); if (j.reason) msg = j.reason; } catch {}
+        throw new Error(msg);
+      }
+      const reader = r.body.getReader();
+      const dec = new TextDecoder("utf-8");
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        chatLive.text += dec.decode(value, { stream: true });
+        const el = $("chatLiveA");
+        if (el) el.textContent = chatLive.text;
+      }
+    } catch (e) {
+      chatLive.text += "\n[chat error: " + (e && e.message ? e.message : e) + "]";
+      const el = $("chatLiveA");
+      if (el) el.textContent = chatLive.text;
+    }
+    state.chatHist.push({ q: chatLive.q, a: chatLive.text.trim() });
+    chatLive = null;
+    state.chatBusy = false;
+    renderReasoner();
+    const qIn = $("chatQ");
+    if (qIn) qIn.focus();
+  }
+
+  function bindChat() {
+    const q = $("chatQ"), s = $("chatSend");
+    if (!q || !s) return;
+    const go = () => {
+      const v = q.value.trim();
+      if (!v || state.chatBusy) return;
+      q.value = "";
+      chatAsk(v);
+    };
+    s.addEventListener("click", go);
+    q.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
+    const chipsBox = $("chatChips");
+    if (chipsBox) {
+      chipsBox.innerHTML = "";
+      for (const c of chatChips()) {
+        const b = document.createElement("button");
+        b.className = "hint-chip";
+        b.textContent = c;
+        b.disabled = state.chatBusy;
+        b.addEventListener("click", () => { q.value = c; go(); });
+        chipsBox.appendChild(b);
+      }
+    }
   }
 
   async function runReasonerNow(force) {
@@ -385,14 +517,17 @@
   GBChart.init($("chart"), $("indChart"), $("eqChart"));
 
   $("btnRezClose").addEventListener("click", () => { $("rezModal").hidden = true; });
+  $("btnLearnClose").addEventListener("click", () => { $("learnModal").hidden = true; });
   $("btnRezSave").addEventListener("click", async () => {
-    const key = $("rezKey").value.trim();
-    if (key === "(saved)") { $("rezModal").hidden = true; return; }
+    let key = $("rezKey").value.trim();
+    const c = state.rezConfig || {};
+    if (key === "(saved)") key = c.configured ? "(keep-current-key)" : "";
     if (!key) { alert("Paste an API key (or keep '(saved)' and change base/model)."); return; }
     const body = JSON.stringify({
       apiKey: key,
       baseURL: $("rezBase").value.trim(),
       model: $("rezModel").value.trim(),
+      mt5Files: $("rezMt5").value.trim(),
     });
     const r = await fetch("/api/reasoner/config", { method: "POST", headers: { "content-type": "application/json" }, body });
     const j = await r.json();

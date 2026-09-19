@@ -7,7 +7,7 @@ const { URL } = require("url");
 const { getCandles, putUpload, listMt5Files, TF_MS } = require("./src/data");
 const { analyze } = require("./src/analyze");
 const { getNews } = require("./src/news");
-const { runReasoner, configStatus, saveConfig } = require("./src/reasoner");
+const { runReasoner, configStatus, saveConfig, chatReasoner } = require("./src/reasoner");
 
 const TF_LABEL = { M1: "1m", M2: "2m", M5: "5m", M15: "15m", M30: "30m", H1: "1h", H4: "4h", D1: "1d" };
 
@@ -259,8 +259,49 @@ const server = http.createServer(async (req, res) => {
       } catch {
         return sendJSON(res, 400, { ok: false, reason: "bad JSON body" });
       }
-      const r = saveConfig({ apiKey: body.apiKey, baseURL: body.baseURL, model: body.model });
+      const r = saveConfig({ apiKey: body.apiKey, baseURL: body.baseURL, model: body.model, mt5Files: body.mt5Files });
       return sendJSON(res, r.ok ? 200 : 400, r);
+    }
+
+    // Discovery chat - educational/entertaining lens, streamed to the browser.
+    if (p === "/api/reasoner/chat" && req.method === "POST") {
+      const chunks = [];
+      for await (const ck of req) chunks.push(ck);
+      let body;
+      try {
+        body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+      } catch {
+        return sendJSON(res, 400, { ok: false, reason: "bad JSON body" });
+      }
+      const question = String(body.q || "").slice(0, 500).trim();
+      if (!question) return sendJSON(res, 400, { ok: false, reason: "no question" });
+      const { symbol, tf, bars, ui } = paramsOf(req, urlObj);
+      if (!configStatus().configured) {
+        return sendJSON(res, 400, { ok: false, reason: "not-configured" });
+      }
+      res.setHeader("content-type", "text/plain; charset=utf-8");
+      res.writeHead(200);
+      try {
+        const dataRes = await getCandles(symbol, tf, bars);
+        const out = analyze(dataRes.candles, symbol, tf, bars, ui);
+        out.source = dataRes.source;
+        out.sourceLabel = dataRes.label || "";
+        out.dataNote = dataRes.note || "";
+        out.generatedAt = dataRes.generatedAt || Date.now();
+        out.account = ui;
+        let news = [];
+        try {
+          const n = await getNews();
+          news = n.items || [];
+        } catch { news = []; }
+        await chatReasoner(out, news, question, { ui }, (tok) => {
+          if (!res.destroyed) res.write(tok);
+        });
+      } catch (e) {
+        res.write(`\n[reasoner chat error: ${String((e && e.message) || e)}]`);
+      }
+      if (!res.destroyed) res.end();
+      return;
     }
 
     if (p === "/api/duel") {

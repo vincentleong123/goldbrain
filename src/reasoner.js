@@ -37,19 +37,28 @@ function loadConfig() {
   const isAnthropic = /anthropic/i.test(baseURL) || (/^(claude-)/i.test(model) && !baseURL);
   if (!baseURL) baseURL = isAnthropic ? FALLBACKS.anthropic.baseURL : FALLBACKS.openai.baseURL;
   if (!model) model = isAnthropic ? FALLBACKS.anthropic.model : FALLBACKS.openai.model;
-  return { apiKey, baseURL: baseURL.replace(/\/+$/, ""), model, provider: isAnthropic ? "anthropic" : "openai-compatible" };
+  return { apiKey, baseURL: baseURL.replace(/\/+$/, ""), model, provider: isAnthropic ? "anthropic" : "openai-compatible", mt5Files: String(file.mt5Files || "").trim() };
 }
 
 function configStatus() {
   const c = loadConfig();
-  return { configured: !!c.apiKey, provider: c.provider, model: c.model, baseURL: c.baseURL };
+  return { configured: !!c.apiKey, provider: c.provider, model: c.model, baseURL: c.baseURL, mt5Files: c.mt5Files || "" };
 }
 
-function saveConfig({ apiKey, baseURL, model }) {
-  const key = String(apiKey || "").trim();
+function saveConfig({ apiKey, baseURL, model, mt5Files }) {
+  let key = String(apiKey || "").trim();
+  if (key === "(keep-current-key)") {
+    const cur = loadConfig();
+    key = cur.apiKey || "";
+  }
   if (!key) return { ok: false, reason: "API key is required." };
   fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify({ apiKey: key, baseURL: String(baseURL || "").trim(), model: String(model || "").trim() }, null, 2));
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify({
+    apiKey: key,
+    baseURL: String(baseURL || "").trim(),
+    model: String(model || "").trim(),
+    mt5Files: String(mt5Files || "").trim(),
+  }, null, 2));
   return { ok: true, ...configStatus() };
 }
 
@@ -107,6 +116,85 @@ async function callLLM(cfg, system, user, timeoutMs = 65000) {
   }
 }
 
+// ---------------------------------------------------------------- LLM streaming
+// Streams tokens from the provider (OpenAI-compatible NDJSON or Anthropic SSE).
+// onToken(text) is called for every text slice; resolves when the reply ends.
+async function callLLMStream(cfg, system, user, onToken, timeoutMs = 120000) {
+  const isAnthropic = cfg.provider === "anthropic";
+  const ac = new AbortController();
+  const to = setTimeout(() => ac.abort(), timeoutMs);
+  const dec = new TextDecoder("utf-8");
+  try {
+    const payload = isAnthropic
+      ? { model: cfg.model, max_tokens: 900, system, messages: [{ role: "user", content: user }], stream: true }
+      : { model: cfg.model, temperature: 0.5, max_tokens: 900, stream: true,
+          messages: [
+            { role: "system", content: system },
+            { role: "user", content: user },
+          ] };
+    const res = isAnthropic
+      ? await fetch(`${cfg.baseURL}/v1/messages`, {
+          method: "POST",
+          headers: {
+            "x-api-key": cfg.apiKey,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(payload),
+          signal: ac.signal,
+        })
+      : await fetch(`${cfg.baseURL}/chat/completions`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${cfg.apiKey}`, "content-type": "application/json" },
+          body: JSON.stringify(payload),
+          signal: ac.signal,
+        });
+    if (!res.ok) throw new Error(`LLM ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    const reader = res.body.getReader();
+    let buf = "";
+    let done = false;
+    while (!done) {
+      const { value, done: d } = await reader.read();
+      if (d) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (line.startsWith("data:")) {
+          const data = line.slice(5).trim();
+          if (data === "[DONE]") { done = true; break; }
+          try {
+            const j = JSON.parse(data);
+            if (isAnthropic) {
+              if (j.type === "content_block_delta" && j.delta && j.delta.type === "text_delta" && j.delta.text) {
+                onToken(j.delta.text);
+              }
+            } else {
+              const dTxt = j.choices && j.choices[0] && j.choices[0].delta && j.choices[0].delta.content;
+              if (typeof dTxt === "string" && dTxt) onToken(dTxt);
+            }
+          } catch { /* skip partial frames */ }
+        }
+      }
+    }
+  } finally {
+    clearTimeout(to);
+  }
+}
+
+// Interactive Discovery chat - educational/entertaining lens over the SAME snapshot+news.
+async function chatReasoner(analysis, news, question, opts = {}, onToken) {
+  const cfg = loadConfig();
+  if (!cfg.apiKey) throw new Error("not-configured");
+  const ui = opts.ui || { balance: 1000, riskPct: 1 };
+  const context = buildContext(analysis, opts, news);
+  const full = `The live snapshot:\n\n${context}\n\nThe question you must answer:\n${question}`;
+  let text = "";
+  await callLLMStream(cfg, CHAT_PROMPT, full, (tok) => { text += tok; if (onToken) onToken(tok); });
+  return { ok: true, text: text.trim(), model: cfg.model, provider: cfg.provider };
+}
+
 // ---------------------------------------------------------------- plan parse
 function parsePlan(text) {
   if (!text) return { ok: false, reason: "empty model output" };
@@ -149,6 +237,7 @@ function parsePlan(text) {
     target: num("target"),
     rr: num("rr"),
     sizeNote: str("sizeNote"),
+    story: str("story"),
     reason: arr("reason"),
     risks: arr("risks"),
     dominatedBy: arr("dominatedBy"),
@@ -253,6 +342,7 @@ OUTPUT - ONLY a single JSON object, no markdown, no prose before/after:
   "target": number,
   "rr": number,
   "sizeNote": "number of 0.1-lot units given the risk budget",
+  "story": "2-4 vivid sentences in plain trader English narrating HOW you reached this read - the psychology, the structure, the kicker. Make it genuinely interesting and teaching-oriented, no jargon walls. This is the human part.",
   "reason": ["3-5 short reasons, each a real causal argument"],
   "risks": ["1-3 concrete risks for THIS setup"],
   "dominatedBy": ["structure", "stage"|"news"|"session"|"levels"|"fundamentals", ...top drivers],
@@ -261,6 +351,16 @@ OUTPUT - ONLY a single JSON object, no markdown, no prose before/after:
   "scenarioBase": {"trigger": "...", "target": number},
   "scenarioBear": {"trigger": "...", "target": number}
 }`;
+
+// Teaching / discovery persona for the chat. Same live snapshot, different lens:
+// explain, entertain, awaken curiosity. Honest - never pretends to know the future.
+const CHAT_PROMPT = `You are the EDUCATOR inside GoldBrain - a warm, vivid teacher who makes XAUUSD (gold) trading COMPREHENSIBLE and interesting.
+You have the same live snapshot the Reasoner used. Answer the person's question directly and well:
+- Teach: explain with plain words and a concrete analogy when it helps.
+- Be honest: you are an AI that reasons over data + headlines; you do NOT see the future. Say so whenever a question implies prediction.
+- Keep answers tight (under ~180 words) unless the question asks for depth. Use the actual numbers/levels/stage from the snapshot so answers feel real, not generic.
+- If asked to critique the current read: give the strongest honest case against it - a teacher who only flatters teaches nothing.
+- Format with short lines and dashes. No giant walls of text. No emojis.`;
 
 function confidenceLabel(c) {
   if (c >= 0.75) return "high";
@@ -357,19 +457,30 @@ async function runReasoner(analysis, opts = {}) {
   }
   if (news.length === 0) result.warnings.push("No news feed available this refresh - reason ran on structure/stage/session only.");
   // advisory plan file (for the GoldPsychoEA to read if the user enables handoff)
+  const planDoc = {
+    advisory: true,
+    at: result.generatedAt,
+    symbol: analysis.symbol,
+    tf: analysis.tf,
+    price: (analysis.contract && analysis.contract.price) || analysis.price || 0,
+    atr: (analysis.ind && analysis.ind.atr) || analysis.atr || 0,
+    plan: result.plan,
+  };
   try {
     fs.mkdirSync(path.dirname(PLAN_FILE), { recursive: true });
-    fs.writeFileSync(PLAN_FILE, JSON.stringify({
-      advisory: true,
-      at: result.generatedAt,
-      symbol: analysis.symbol,
-      tf: analysis.tf,
-      plan: result.plan,
-    }, null, 2));
+    fs.writeFileSync(PLAN_FILE, JSON.stringify(planDoc, null, 2));
   } catch {
     /* plan file is best-effort */
+  }
+  // optional mirror into MT5's MQL5\Files\ folder so the EA picks it up live
+  const mt5Dir = loadConfig().mt5Files;
+  if (mt5Dir) {
+    try {
+      fs.mkdirSync(mt5Dir, { recursive: true });
+      fs.writeFileSync(path.join(mt5Dir, "reasoner-plan.json"), JSON.stringify(planDoc, null, 2));
+    } catch { /* mirror is best-effort */ }
   }
   return result;
 }
 
-module.exports = { runReasoner, buildContext, loadConfig, configStatus, saveConfig, callLLM, parsePlan, validatePlan, PLAN_FILE };
+module.exports = { runReasoner, buildContext, loadConfig, configStatus, saveConfig, callLLM, callLLMStream, chatReasoner, parsePlan, validatePlan, PLAN_FILE };

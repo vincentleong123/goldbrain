@@ -45,6 +45,15 @@ input int    InpTimeExitBars  = 8;             // close if open > N bars
 input double InpMaxDailyLoss  = 3.0;           // % daily strategy stop
 input double InpMaxSpread     = 3.0;           // skip if spread > pts
 
+input group "===== Reasoner plan handoff (GoldBrain) ====="
+input bool   InpUseReasoner   = false;         // true = trade the Reasoner plan file, not own counter rules
+input string InpPlanFile      = "GoldBrain\\reasoner-plan.json";
+input int    InpPlanPollSec   = 20;            // re-read plan file every N seconds
+input int    InpPlanMaxAgeSec = 300;           // ignore plan older than this
+input double InpMinConviction = 0.50;          // min plan conviction (0..1) to accept
+input double InpMinRR         = 1.20;          // min reward:risk to accept a plan
+input int    InpPlanSlipPts   = 0;             // 0 = ATR-based slip allowance
+
 //============================= globals ==============================
 CTrade       trade;
 ulong        g_magic = 777001;
@@ -59,6 +68,16 @@ bool         g_halfDone= false;    // have we banked the first half at anchor
 double       g_extreme = 0;        // best price since open (for trail)
 double       g_dayEquity  = 0;
 int          g_day        = -1;
+
+// ----- Reasoner plan handoff state -----
+datetime     g_planPoll    = 0;    // last plan file poll time
+string       g_planJson    = "";   // raw last-read plan file contents
+bool         g_planArmed   = false;// a fresh valid plan is loaded
+string       g_planDir     = "flat";
+double       g_planConviction = 0;
+double       g_planEntry   = 0;
+double       g_planStop    = 0;
+double       g_planTarget  = 0;
 
 //============================== helpers =============================
 // Wilder RSI (same family as the JS engine)
@@ -200,6 +219,198 @@ double CurrentATR()
    return atrArr[have - 1];
   }
 
+//====================== Reasoner plan handoff ========================
+// Minimal JSON field extractors (MQL5 has no regex); keys are unique.
+string RzStr(string key)
+  {
+   string pat = "\"" + key + "\"";
+   int p = StringFind(g_planJson, pat);
+   if(p < 0) return "";
+   p = StringFind(g_planJson, ":", p);
+   if(p < 0) return "";
+   p = StringFind(g_planJson, "\"", p);
+   if(p < 0) return "";
+   int q = StringFind(g_planJson, "\"", p + 1);
+   if(q < 0) return "";
+   return StringSubstr(g_planJson, p + 1, q - p - 1);
+  }
+
+double RzNum(string key)
+  {
+   string pat = "\"" + key + "\"";
+   int p = StringFind(g_planJson, pat);
+   if(p < 0) return 0;
+   p = StringFind(g_planJson, ":", p);
+   if(p < 0) return 0;
+   string tail = StringSubstr(g_planJson, p + 1);
+   StringTrimLeft(tail);
+   int n = 0, L = StringLen(tail);
+   while(n < L)
+     {
+      int c = StringGetCharacter(tail, n);
+      if((c>='0' && c<='9') || c=='.' || c=='-' || c=='e' || c=='E') n++;
+      else break;
+     }
+   if(n == 0) return 0;
+   return StringToDouble(StringSubstr(tail, 0, n));
+  }
+
+bool RzBool(string key)
+  {
+   return StringFind(g_planJson, "\"" + key + "\":true") >= 0 ||
+          StringFind(g_planJson, "\"" + key + "\" : true") >= 0;
+  }
+
+bool RzReadFile()
+  {
+   int h = FileOpen(InpPlanFile, FILE_READ|FILE_TXT|FILE_ANSI|FILE_SHARE_READ, 0, CP_UTF8);
+   if(h == INVALID_HANDLE) return false;
+   g_planJson = "";
+   while(!FileIsEnding(h)) g_planJson += FileReadString(h);
+   FileClose(h);
+   return StringLen(g_planJson) > 10;
+  }
+
+// Load + validate the plan file into globals; sets g_planArmed.
+void RzUpdate(bool verbose)
+  {
+   g_planArmed = false;
+   if(!InpUseReasoner) return;
+   if(!RzReadFile())
+     {
+      g_planJson = "";
+      if(verbose) Print("[REASONER] plan file not found: ", InpPlanFile, " (copy data\\reasoner-plan.json into MQL5\\Files)");
+      return;
+     }
+   g_planDir = RzStr("direction");
+   if(g_planDir != "long" && g_planDir != "short")
+     {
+      if(verbose) Print("[REASONER] plan = '", g_planDir, "' (flat or unrecognised) - no action.");
+      return;
+     }
+   if(!RzBool("ok"))
+     {
+      if(verbose) Print("[REASONER] plan.ok=false - decision rejected (stop too tight / wrong side etc).");
+      return;
+     }
+   g_planConviction = RzNum("conviction");
+   g_planEntry      = RzNum("entry");
+   g_planStop       = RzNum("stop");
+   g_planTarget     = RzNum("target");
+   double rrPlan    = RzNum("rr");
+   long   atMs      = (long)RzNum("at");
+   string symRz     = RzStr("symbol");
+
+   long ageSec = (atMs > 0) ? (TimeCurrent() - atMs / 1000) : 999999;
+   if(InpPlanMaxAgeSec > 0 && (ageSec > InpPlanMaxAgeSec || ageSec < 0))
+     {
+      if(verbose) Print("[REASONER] plan expired (", ageSec, "s > max ", InpPlanMaxAgeSec, "s). Refresh dashboard.");
+      return;
+     }
+   if(g_planConviction < InpMinConviction)
+     {
+      if(verbose) Print("[REASONER] conviction ", DoubleToString(g_planConviction, 2), " < min ", InpMinConviction, ".");
+      return;
+     }
+   if(rrPlan < InpMinRR)
+     {
+      if(verbose) Print("[REASONER] RR ", DoubleToString(rrPlan, 2), " < min ", InpMinRR, ".");
+      return;
+     }
+   if(g_planEntry <= 0 || g_planStop <= 0 || g_planTarget <= 0)
+     {
+      if(verbose) Print("[REASONER] plan levels missing.");
+      return;
+     }
+   bool wrongSide = (g_planDir == "long") ? (g_planStop >= g_planEntry || g_planTarget <= g_planEntry)
+                                          : (g_planStop <= g_planEntry || g_planTarget >= g_planEntry);
+   if(wrongSide)
+     {
+      if(verbose) Print("[REASONER] stop/target on wrong side of entry - plan unsafe, ignore.");
+      return;
+     }
+   if(StringLen(symRz) > 0 && StringToUpper(symRz) != StringToUpper(g_sym))
+     {
+      if(verbose) Print("[REASONER] plan for ", symRz, " != EA symbol ", g_sym, " - ignore.");
+      return;
+     }
+   g_planArmed = true;
+  }
+
+void RzTryOpen()
+  {
+   RzUpdate(true);
+   if(!g_planArmed) return;
+   if(HasCounterPosition(g_magic)) { Print("[REASONER] already in a position - skip new."); return; }
+
+   double bid  = SymbolInfoDouble(g_sym, SYMBOL_BID);
+   double ask  = SymbolInfoDouble(g_sym, SYMBOL_ASK);
+   bool  isBuy = (g_planDir == "long");
+   double ref  = isBuy ? ask : bid;
+   double point = SymbolInfoDouble(g_sym, SYMBOL_POINT);
+   double atrM = CurrentATR();
+   double slipPts = (InpPlanSlipPts > 0) ? InpPlanSlipPts : (atrM > 0 ? atrM / point * 0.6 : 200);
+   if(MathAbs(ref - g_planEntry) > slipPts * point)
+     {
+      Print("[REASONER] price ", DoubleToString(ref, 2), " drifted ",
+            DoubleToString(MathAbs(ref - g_planEntry) / point, 0),
+            " pts from plan entry - skip (re-Think in dashboard).");
+      return;
+     }
+   double spreadPts = (ask - bid) / point;
+   if(spreadPts > InpMaxSpread) { Print("[REASONER] spread ", DoubleToString(spreadPts, 1), " pts - skip."); return; }
+
+   double stopDist = MathAbs(g_planEntry - g_planStop);
+   if(stopDist <= 0) return;
+   double tickV = SymbolInfoDouble(g_sym, SYMBOL_TRADE_TICK_VALUE);
+   double tickS = SymbolInfoDouble(g_sym, SYMBOL_TRADE_TICK_SIZE);
+   double perPointLot = (tickS > 0 && tickV > 0) ? tickV / tickS : 100.0;
+   double riskUsd = AccountInfoDouble(ACCOUNT_EQUITY) * InpRiskPercent / 100.0;
+   double lots = CalcLots(riskUsd, stopDist, perPointLot);
+   if(lots <= 0) { Print("[REASONER] lot rounds to 0 (risk too small)."); return; }
+
+   ENUM_ORDER_TYPE dir = isBuy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+   double sl = NormalizeDouble(g_planStop,   _Digits);
+   double tp = NormalizeDouble(g_planTarget, _Digits);
+   string advice = StringFormat("REASONER %s lots=%.2f entry=%.2f stop=%.2f target=%.2f rr=%.2f conv=%.2f",
+      (isBuy ? "BUY" : "SELL"), lots, ref, sl, tp, RzNum("rr"), g_planConviction);
+
+   if(!InpLiveTrading)
+     {
+      Print("[SIMULATE] " + advice + "  (flip InpLiveTrading = true to fire)");
+      return;
+     }
+   trade.SetExpertMagicNumber(g_magic);
+   trade.SetDeviationInPoints(50);
+   if(trade.PositionOpen(g_sym, dir, lots, ref, sl, tp, "GoldBrain reasoner"))
+     {
+      g_openT    = TimeCurrent();
+      g_extreme  = ref;
+      g_anchor   = 0;
+      g_halfDone = true;
+      Print("[LIVE] " + advice);
+     }
+   else Print("[REASONER] order failed err=", GetLastError());
+  }
+
+void RzManage()
+  {
+   int total = PositionsTotal();
+   for(int i = 0; i < total; i++)
+     {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetString(POSITION_SYMBOL) != g_sym) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != (long)g_magic) continue;
+      datetime openT = (long)PositionGetInteger(POSITION_TIME);
+      if(InpTimeExitBars > 0 && TimeCurrent() - openT >= (long)InpTimeExitBars * PeriodSeconds(g_tf))
+        {
+         trade.PositionClose(tk);
+         Print("[REASONER] time-exit after ", InpTimeExitBars, " bars.");
+        }
+     }
+  }
+
 void ManagePosition()
   {
    int total = PositionsTotal();
@@ -237,7 +448,7 @@ void ManagePosition()
       double vmin  = SymbolInfoDouble(g_sym, SYMBOL_VOLUME_MIN);
       // ---- 2) anchor: bank HALF at their breakeven, trail the runner
       bool touchedAnchor = g_anchor > 0 && (isBuy ? (bid >= g_anchor) : (ask <= g_anchor));
-      if(touchedAnchor && !g_halfDone)
+      if(touchedAnchor && !g_halfDone && !InpUseReasoner)
         {
          double half = MathMax(MathFloor(vol / 2 / vstep) * vstep, vmin);
          if(vol >= vmin * 2 && half < vol)
@@ -253,8 +464,8 @@ void ManagePosition()
          else { trade.PositionClose(tk); Print("ANCHOR HIT: position small - closed all."); continue; }
          g_halfDone = true;
         }
-      // ---- 3) trail the runner (only after half banked)
-      if(g_halfDone && vol > 0)
+      // ---- 3) trail the runner (only after half banked; never in reasoner mode)
+      if(g_halfDone && vol > 0 && !InpUseReasoner)
         {
          double stopNew = isBuy ? g_extreme - InpTrailAtr * atr
                                 : g_extreme + InpTrailAtr * atr;
@@ -386,6 +597,12 @@ int OnInit()
    else
       Print("GoldPsychoEA LIVE-ARMED. Ensure this is a DEMO account. Risk ", 
             InpRiskPercent, "%/trade, daily stop ", InpMaxDailyLoss, "%.");
+   if(InpUseReasoner)
+     {
+      RzUpdate(true);
+      Print("Reasoner handoff ON - EA follows data\\reasoner-plan.json (mapped: ", InpPlanFile, ").");
+      Print("  Copy goldbrain\\data\\reasoner-plan.json to MQL5\\Files\\ and keep it updated from the dashboard.");
+     }
    return INIT_SUCCEEDED;
   }
 void OnDeinit(const int reason) { }
@@ -393,6 +610,25 @@ void OnTick()
   {
    GuardByDay();
    if(TimeCurrent() - g_openT < 0) g_openT = 0;
+   if(InpUseReasoner)
+     {
+      // poll the plan file between bars so it is fresh at the next bar
+      if(g_planPoll == 0 || TimeCurrent() - g_planPoll >= InpPlanPollSec)
+        {
+         g_planPoll = TimeCurrent();
+         RzUpdate(false);
+        }
+      if(g_openT != 0 || HasCounterPosition(g_magic))
+        {
+         RzManage();
+         if(!HasCounterPosition(g_magic)) g_openT = 0;
+        }
+      MqlRates r[];
+      if(CopyRates(g_sym, g_tf, 0, 2, r) < 2) return;
+      datetime cur = r[1].time;
+      if(g_lastBar != cur) { g_lastBar = cur; RzTryOpen(); }
+      return;
+     }
    // manage open position on every tick; try new setups on bar change
    if(g_openT != 0 || HasCounterPosition(g_magic))
      {

@@ -135,9 +135,23 @@
       <label class="cfg-label">Model (optional)
         <input id="rezModel" type="text" placeholder="empty = provider default" />
       </label>
+      <label class="cfg-label">MT5 Files folder (optional - auto-copy plan for the EA)
+        <input id="rezMt5" type="text" placeholder="C:\...\AppData\Roaming\MetaQuotes\Terminal\<id>\MQL5\Files\GoldBrain" />
+      </label>
       <div class="modal-actions">
         <button id="btnRezSave" class="btn">Save settings</button>
         <button id="btnRezClose" class="btn ghost">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="learnModal" hidden>
+    <div class="modal-box modal-wide">
+      <h3>🎓 The Learning Deck</h3>
+      <p>What each word actually means - plain English, one armchair trader to another.</p>
+      <div id="learnBody"></div>
+      <div class="modal-actions">
+        <button id="btnLearnClose" class="btn ghost">Close</button>
       </div>
     </div>
   </div>

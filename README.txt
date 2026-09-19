@@ -41,7 +41,7 @@ SIX MODES (tabs)
                  trained pattern-ML (QuantumLink); it is reasoning.
 
 THE REASONER (AI thinking, not pattern ML)
-------------------------------------------
+-------------------------------------------
 QuantumLink/backtests are traditional ML: features -> fit -> predict.
 The Reasoner replaces that decision step with an LLM that reasons:
 
@@ -55,12 +55,50 @@ The Reasoner replaces that decision step with an LLM that reasons:
      your risk budget, and top ~8 news headlines (free RSS, no keys).
   4. Prompt discipline: fade news-driven flushes, favour session
      liquidity, real levels, hard stops, "flat" when conflicted.
-  5. Output is a reasoned bracket + scenarios + invalidation, written
-     to data\reasoner-plan.json (advisory only - IT NEVER TRADES).
+  5. Output is a reasoned bracket + scenarios + invalidation + a
+     plain-English "story" of HOW it read the tape, written to
+     data\reasoner-plan.json (advisory only - IT NEVER TRADES).
+
+THE EDUCATOR (educational + entertaining + awe)
+----------------------------------------------
+   * "the AI read" - a vivid 2-4 sentence narration of how the
+     decision formed. The part designed to teach and inspire.
+   * Learn the lingo - "Learning Deck" glossary that explains every
+     number on the panel using TODAY'S real values (ATR, conviction,
+     RR, retail-pain stage, scenarios, invalidation).
+   * Discovery chat - type (or tap a suggestion) and the AI teaches
+     over the SAME live snapshot: "Explain the case FOR going long",
+     "Make the strongest argument AGAINST this plan", "Quiz me",
+     "What would falsify this?". Replies stream live. The AI is an
+     honest educator: it clearly says it reasons, it does not
+     predict. Streams are billed to the same API key.
 
 Caveats: the LLM reasons; it does not see the future. Headlines are
 unverified scrapes. Treat the output as a second opinion you verify,
 not an oracle. Always demo-first if you hand the plan to an EA.
+
+EA PLAN HANDOFF (Reasoner -> GoldPsychoEA)
+------------------------------------------
+GoldPsychoEA can execute ONLY Reasoner-approved brackets:
+  1. Attach the EA to XAUUSD M5 with InpUseReasoner = true.
+  2. Keep data\reasoner-plan.json updated from the dashboard (the
+     Think button rewrites it, stamped with "at", symbol, tf, price,
+     ATR). Two ways to feed the EA:
+       a) Auto: Settings -> Reasoner -> set the MT5 Files folder
+          (MQL5\Files\GoldBrain\ under your MetaTrader terminal id),
+          and each Think run mirrors the plan there automatically.
+       b) Manual: copy data\reasoner-plan.json into MQL5\Files\
+          and rename to GoldBrain\reasoner-plan.json.
+  3. The EA polls the file every InpPlanPollSec and only fires when
+     validation passes: fresh (<= InpPlanMaxAgeSec), plan.ok=true,
+     direction long/short, conviction >= InpMinConviction, RR >=
+     InpMinRR, stop/target on the correct side, and market within
+     slip tolerance of the planned entry. In reasoner mode the EA
+     uses the plan's bracket on the broker (no anchor/trail), keeps
+     the time-cap and daily-loss guard, and respects the SIMULATE
+     safety gate until InpLiveTrading = true. Demo-first, always.
+  4. The built-in counter engine is bypassed while InpUseReasoner
+     is on: set it back to false to return to normal counter trades.
 
 THE COUNTER IDEA (Psych Counter / Superman / EA)
 ------------------------------------------------
