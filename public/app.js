@@ -110,7 +110,18 @@
   const SENT_LABEL = { bullish: "up", bearish: "down", neutral: "side", warning: "warn", info: "info" };
 
   function renderModeTab() {
+    const isTh = state.mode === "theatre";
+    const thBox = $("theatreBox");
+    if (thBox) thBox.hidden = !isTh;
+    const cw = $("chartwrap");
+    if (cw) cw.hidden = isTh;
+    const sub = $("subwrap");
+    if (sub) sub.hidden = isTh;
+    const eq = $("eqwrap");
+    if (eq) eq.hidden = isTh;
+    if (isTh) { if (state.theatre.timer && !state.theatre.playing) { clearInterval(state.theatre.timer); state.theatre.timer = null; } }
     if (state.mode === "reasoner") { renderReasoner(); return; }
+    if (isTh) { renderTheatre(); return; }
     const m = analysis && analysis.modes[state.mode];
     if (!m) { $("verdict").innerHTML = "<div class='v-summary'>Loading…</div>"; return; }
     const tone = SENT_LABEL[m.sentiment] || "info";
@@ -408,6 +419,341 @@
     }
   }
 
+  // ------------------------------------------------------------- Theatre
+  state.theatre = { film: null, pos: 0, playing: false, timer: null, speed: 4, lines: [], tShown: 0, metaLoaded: false, _lineIdx: 0, _stay: null };
+  let thRendering = false;
+
+  function thEsc(x) { return String(x === undefined || x === null ? "" : x).replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m])); }
+
+  function renderTheatre() {
+    const th = state.theatre;
+    if (!th.metaLoaded) loadTheatreMeta();
+    let html = `<div class="v-title">🎬 Theatre · watch the AI read gold in fast-forward</div>`;
+    html += `<div class="v-summary">Pick a date range, hit "Render movie", then press play. You watch the chart fly by while the brain reads structure, retail-pain stages and sessions - and on the way it writes its thoughts and takes PAPER trades on a demo account. Nothing real is risked. Educational popcorn.</div>`;
+    if (th.rendering) {
+      const p = th.renderingProgress === null ? 0 : th.renderingProgress;
+      html += `<div class="v-bullet"><span class="dot info"></span><span><b>Rendering movie ${Math.round(p)}%</b> - analysing scenes, thinking where setups fire…</span></div>`;
+    } else if (th.film) {
+      const m = th.film.meta;
+      const pnl = m.balanceEnd - m.balanceStart;
+      html += `<div class="th-trade"><b>${thEsc(m.label)}</b><br/>${m.bars.toLocaleString()} bars · ${m.trades} paper trades · ${m.sparks} AI thoughts · `;
+      html += `paper P&L <span class="pnl ${pnl >= 0 ? "pos" : "neg"}">${pnl >= 0 ? "+" : "−"}$${Math.abs(pnl).toFixed(2)}</span></div>`;
+      html += '<div id="thLog" class="th-log"></div>';
+    } else {
+      html += `<div class="v-summary">No film yet. Choose a start date (default = May 2026 style long run) and press the gold button.</div>`;
+    }
+    html += '<div id="theatrePan" hidden></div>';
+    $("verdict").innerHTML = html;
+    const pan = $("theatrePan");
+    if (pan) { pan.remove(); }
+  }
+
+  async function loadTheatreMeta() {
+    state.theatre.metaLoaded = true;
+    const fig = analysis && analysis.contract;
+    let end = new Date();
+    const from = new Date();
+    from.setMonth(from.getMonth() - 1);
+    $("thStart").value = "2026-05-01";
+    $("thEnd").value = end.toISOString().slice(0, 10);
+    try {
+      const u = "/api/replay/meta?" + qs() + "&start=" + Date.UTC(2026, 4, 1) + "&end=" + Date.now();
+      const r = await fetch(u);
+      if (r.ok) {
+        const j = await r.json();
+        if (j.ok) {
+          const go = j.startTs < Date.UTC(2026, 4, 1) ? new Date(j.startTs) : new Date(Date.UTC(2026, 4, 1));
+          $("thStart").value = go.toISOString().slice(0, 10);
+          $("thEnd").value = new Date(Math.min(j.endTs, Date.now())).toISOString().slice(0, 10);
+          $("thFile").textContent = `${thEsc(j.label)} · ${j.bars.toLocaleString()} bars · ${j.synthesized ? "SYNTHETIC film (no real history this far back - connect MT5/Yahoo for truth)" : "REAL history"}`;
+        }
+      }
+    } catch { /* defaults stand */ }
+    void fig;
+  }
+
+  async function runTheatreRender() {
+    if (thRendering) return;
+    thRendering = true;
+    const th = state.theatre;
+    th.rendering = true;
+    th.film = null;
+    th.lines = []; th.tShown = 0; th.pos = 0;
+    th._lineIdx = 0; th._stay = null; th.activeLine = null;
+    th.renderingProgress = null;
+    stopTheatre();
+    renderTheatre();
+
+    const d0 = new Date($("thStart").value + "T00:00:00Z").getTime();
+    const d1 = new Date($("thEnd").value + "T23:59:59Z").getTime();
+    const ai = $("thAi").checked && state.rezConfig && state.rezConfig.configured ? "1" : "0";
+    const sparks = $("thSparks").value || "6";
+    const acc = saveAccount();
+    th.speed = parseFloat($("thSpeed").value || "4");
+    const url = `/api/replay/render?${qs()}&start=${d0}&end=${d1}&ai=${ai}&sparks=${sparks}&risk=${acc.rk}&balance=${acc.bal}`;
+
+    $("thProg").style.display = "block";
+    $("thSub").textContent = "Rendering movie… the AI thinks at the good moments. The more sparks, the slower the render (each is a real LLM call).";
+    try {
+      const r = await fetch(url);
+      if (!r.ok) throw new Error("Server " + r.status);
+      const reader = r.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
+          if (!line) continue;
+          let j;
+          try { j = JSON.parse(line); } catch { continue; }
+          if (j.done && j.film) {
+            th.film = j.film;
+            th.photons = precomputeScenes(th.film);
+            th.rendering = false;
+            th.filmStarted = false;
+            th.activeLine = null;
+            th._lineIdx = 0; th._stay = null;
+            $("thProgFill").style.width = "100%";
+            const scrub = $("thScrub");
+            if (scrub) { scrub.max = String(j.film.meta.bars - 1); scrub.value = "0"; }
+            $("thSub").textContent = "Film ready. Press play - the AI thinks out loud, trades on paper, and the clock races by.";
+            renderTheatre();
+            drawTheatre(j.film, 0);
+            break;
+          } else if (typeof j.p === "number") {
+            th.renderingProgress = j.p;
+            $("thProgFill").style.width = j.p + "%";
+            $("thSub").textContent = "Rendering " + Math.round(j.p) + "% — " + (j.msg || "");
+          } else if (j.error) {
+            $("thSub").innerHTML = "<span class='warn'>Render failed: " + thEsc(j.error) + "</span>";
+          }
+        }
+      }
+    } catch (e) {
+      $("thSub").innerHTML = "<span class='warn'>Render error: " + thEsc(e.message) + "</span>";
+    }
+    thRendering = false;
+  }
+
+  // index -> sorted lookup structures so playback is O(1)
+  function precomputeScenes(film) {
+    const byI = new Map();
+    for (const s of film.scenes) byI.set(s.i, s);
+    const thoughtAt = new Map();
+    for (const t of film.thoughts) thoughtAt.set(t.i, t);
+    const tradeOpens = new Map();
+    const tradeCloses = new Map();
+    for (const t of film.trades) { tradeOpens.set(t.i0, t); tradeCloses.set(t.iClose, t); }
+    return { byI, thoughtAt, tradeOpens, tradeCloses };
+  }
+
+  function stopTheatre() {
+    const th = state.theatre;
+    if (th.timer) { clearInterval(th.timer); th.timer = null; }
+    th.playing = false;
+    const b = $("thPlay");
+    if (b) { b.textContent = "▶ Play"; b.classList.remove("off"); }
+  }
+
+  function theatreTick() {
+    const th = state.theatre;
+    const film = th.film;
+    if (!film) return;
+    if (th.pos >= film.meta.bars - 1) {
+      stopTheatre();
+      theatreEnded(film);
+      return;
+    }
+    th.pos = Math.min(film.meta.bars - 1, th.pos + th.speed);
+    const i = Math.round(th.pos);
+    const ph = th.photons;
+
+    // thoughts appear (typewriter when a story exists)
+    const t = ph.thoughtAt.get(i);
+    if (t && th.tShown < (film.thoughts || []).length) {
+      th.tShown++;
+      const ln = { who: t.who, full: t.story || t.text || "", chars: 0, plan: t.plan, story: t.story };
+      th.lines.push(ln);
+      th.activeLine = ln;
+      flushLines(false);
+    }
+    const tr = ph.tradeOpens.get(i);
+    if (tr) {
+      th.lines.push({ who: "open", tr });
+      flushLines(false);
+    }
+    const tc = ph.tradeCloses.get(i);
+    if (tc) {
+      th.lines.push({ who: "close", tc });
+      flushLines(false);
+    }
+    const sc = ph.byI.get(i);
+
+    // advance typewriter for the active thought
+    if (th.activeLine && th.activeLine.chars < (th.activeLine.full || "").length) {
+      th.activeLine.chars += th.speed * 2.2;
+      if (th.activeLine.span) th.activeLine.span.textContent = th.activeLine.full.slice(0, Math.floor(th.activeLine.chars));
+    }
+    const scrub = $("thScrub");
+    if (scrub) scrub.value = String(i);
+    $("thSub").innerHTML = sceneLine(film, sc, i);
+
+    if (th.pos >= film.meta.bars - 1) {
+      stopTheatre();
+      theatreEnded(film);
+      return;
+    }
+    drawTheatre(film, i);
+  }
+
+  function sceneLine(film, sc, i) {
+    if (!sc) return `<span class="em">Bar ${i}</span> · ${thEsc(film.meta.label)}`;
+    const s = sc.stage ? ` · stage: ${thEsc(sc.stage.rule || "")}` : "";
+    const ign = sc.ignition !== "none" ? ` · <span class="em">ignition ${thEsc(sc.ignition)}</span>` : "";
+    const ses = ` · ${thEsc(sc.session)}${sc.bullish ? " <span class='ok'>bullish structure</span>" : sc.bearish ? " <span class='warn'>bearish structure</span>" : ""}`;
+    return `<span class="em">${new Date(sc.t).toISOString().replace("T", " ").slice(0, 16)} UTC</span> · <b>$${sc.price.toFixed(2)}</b>${ses}${ign}${s}`;
+  }
+
+  function theatreEnded(film) {
+    const m = film.meta;
+    const pnl = m.balanceEnd - m.balanceStart;
+    const pnlTxt = `${pnl >= 0 ? "won" : "lost"} $${Math.abs(pnl).toFixed(2)}`;
+    $("thSub").innerHTML = `<span class="em">THE END</span> · ${m.trades} paper trades, ${m.sparks} AI thoughts · paper account ${pnlTxt}.<br/>Backtests are idealized: no slippage, no intrabar fills. Educational movie - not a forecast.`;
+    const log = $("thLog");
+    if (log && !log.dataset.ended) {
+      log.dataset.ended = "1";
+      const wrap = document.createElement("div");
+      wrap.className = "th-trade";
+      wrap.innerHTML = `<b>Paper verdict</b><br/>Start $${m.balanceStart.toFixed(2)} → End $${m.balanceEnd.toFixed(2)} · <span class="pnl ${pnl >= 0 ? "pos" : "neg"}">${pnl >= 0 ? "+" : "−"}$${Math.abs(pnl).toFixed(2)}</span><br/>Risk per trade ${1.5}% | ${m.synthesized ? "synthetic stylised data" : m.label}`;
+      log.appendChild(wrap);
+    }
+  }
+
+  // append any unwritten lines into the running log
+  function flushLines(_fullOnly) {
+    const th = state.theatre;
+    const log = $("thLog");
+    if (!log) return;
+    if (!th._stay) log.appendChild(th._stay = document.createElement("div"));
+    while (th._lineIdx < th.lines.length) {
+      const ln = th.lines[th._lineIdx];
+      const el = document.createElement("div");
+      if (ln.who === "open") {
+        const tr = ln.tr;
+        el.className = "th-trade " + tr.dir;
+        el.innerHTML = `<b>PAPER OPEN ${tr.dir.toUpperCase()}</b> ${tr.lots} lot @ $${tr.entry.toFixed(2)} · stop $${tr.stop.toFixed(2)} · target $${tr.target.toFixed(2)}${tr.spark === "ai" ? " · <b>by the AI</b>" : " · structure engine"}`;
+      } else if (ln.who === "close") {
+        const tc = ln.tc;
+        el.className = "th-trade " + tc.dir;
+        const pnl = tc.pnl >= 0 ? `<span class="pnl pos">+$${tc.pnl.toFixed(2)}</span>` : `<span class="pnl neg">−$${Math.abs(tc.pnl).toFixed(2)}</span>`;
+        el.innerHTML = `<b>PAPER CLOSE</b> @ $${tc.exit.toFixed(2)} (${thEsc(tc.why)}) → ${pnl}` + (tc.story ? ` <i class="hint">${thEsc(tc.story)}</i>` : "");
+      } else {
+        el.className = "th-trade " + (ln.who === "ai" ? "long" : ln.who === "engine" ? "" : "");
+        el.innerHTML = `<b>${ln.who === "ai" ? "THE AI THINKS" : ln.who === "engine" ? "STRUCTURE ENGINE" : "SYSTEM"}</b>`;
+        const span = document.createElement("span");
+        span.className = "th-think";
+        el.appendChild(span);
+        ln.span = span;
+        if (ln.full) span.textContent = ln.full.slice(0, 1);
+        if (ln.plan && ln.plan.direction && ln.plan.direction !== "flat" && ln.plan.direction !== "undefined") {
+          const p2 = ln.plan;
+          el.innerHTML += ` <span class="hint">→ ${p2.direction.toUpperCase()} · conv ${Math.round((p2.conviction || 0) * 100)}% · entry $${(p2.entry || 0).toFixed(2)} · stop $${(p2.stop || 0).toFixed(2)} · target $${(p2.target || 0).toFixed(2)}</span>`;
+        }
+      }
+      th._stay.insertBefore(el, th._stay.firstChild);
+      th._lineIdx++;
+    }
+  }
+
+  function theatrePlayPause() {
+    const th = state.theatre;
+    if (!th.film) { runTheatreRender(); return; }
+    if (th.playing) { stopTheatre(); return; }
+    th.playing = true;
+    const b = $("thPlay");
+    if (b) { b.textContent = "❚❚ Pause"; b.classList.add("off"); }
+    if (!th.filmStarted) { th.pos = 0; th.filmStarted = true; }
+    th.timer = setInterval(theatreTick, 80);
+  }
+
+  // -------- theatre chart (self-contained canvas drawing) --------
+  function drawTheatre(film, pos) {
+    const cv = $("theatreChart");
+    if (!cv) return;
+    const dpr = window.devicePixelRatio || 1;
+    const W = cv.clientWidth || 600, H = cv.clientHeight || 320;
+    if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+    const g = cv.getContext("2d");
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, W, H);
+
+    const bars = film.bars;
+    const nb = Math.min(240, pos + 1);
+    const from = Math.max(0, pos - nb + 1);
+    const bb = bars.slice(from, pos + 1);
+    if (!bb.length) return;
+    let lo = Infinity, hi = -Infinity;
+    for (const c of bb) { if (c.l < lo) lo = c.l; if (c.h > hi) hi = c.h; }
+    const pad = (hi - lo) * 0.08 || 1;
+    lo -= pad; hi += pad;
+    const bw = W / nb;
+    const Y = (p) => H - ((p - lo) / (hi - lo)) * H;
+    const up = "#57d9a3", dn = "#ff6b7a", flat = "#7e8698";
+
+    g.fillStyle = "rgba(255,255,255,0.035)";
+    for (let x = 40; x < W; x += 40) { g.fillRect(x, 0, 1, H); }
+    for (let yg = 24; yg < H; yg += 28) { g.fillRect(0, yg, W, 1); }
+
+    const lastC = bb[bb.length - 1];
+    // grid text
+    g.fillStyle = "#9aa2b6"; g.font = "10px Consolas, monospace"; g.textAlign = "left";
+    g.fillText("$" + hi.toFixed(0), 6, 14);
+    g.fillText("$" + lo.toFixed(0), 6, H - 6);
+
+    for (let k = 0; k < bb.length; k++) {
+      const c = bb[k];
+      const x = k * bw;
+      const col = c.c >= c.o ? up : dn;
+      g.fillStyle = col;
+      const wick = (c.h - c.l) > 0 ? 1 : 1;
+      g.fillRect(x + bw / 2 - 0.5, Y(c.h), wick, Math.max(1, Y(c.l) - Y(c.h)));
+      const bodyH = Math.max(2, Math.abs(Y(c.o) - Y(c.c)));
+      g.fillRect(x + 1.5, Y(Math.max(c.o, c.c)), Math.max(1, bw - 3), bodyH);
+    }
+
+    // open trade marker + bracket
+    const trOpen = state.theatre.photons && state.theatre.photons.tradeOpens.get(Math.round(pos));
+    const trClose = state.theatre.photons && state.theatre.photons.tradeCloses.get(Math.round(pos));
+    const marker = trOpen || trClose;
+    if (marker) {
+      const x = (marker.i0 <= pos ? marker.i0 : marker.iClose) - from;
+      if (x >= 0 && x < nb) {
+        g.strokeStyle = marker.dir === "long" ? up : dn;
+        g.lineWidth = 2;
+        g.beginPath();
+        g.moveTo(x * bw + bw / 2, Y(marker.entry)); g.lineTo(W - 20 < 0 ? 0 : Math.max(x * bw + bw / 2, 0), Y(marker.entry)); g.stroke();
+        g.strokeStyle = "rgba(255,255,255,0.5)"; g.lineWidth = 1;
+        g.beginPath(); g.moveTo(0, Y(marker.stop)); g.lineTo(W, Y(marker.stop)); g.stroke();
+        g.beginPath(); g.moveTo(0, Y(marker.target)); g.lineTo(W, Y(marker.target)); g.stroke();
+        const cx = Math.max(x * bw + bw / 2, 14);
+        g.beginPath(); g.arc(cx, Y(marker.entry), 4, 0, Math.PI * 2);
+        g.fillStyle = marker.dir === "long" ? up : dn; g.fill();
+      }
+    }
+
+    // price tag
+    g.fillStyle = lastC.c >= lastC.o ? up : dn;
+    g.font = "bold 12px Consolas, monospace";
+    g.textAlign = "right";
+    g.fillText("$" + lastC.c.toFixed(2), W - 8, 16);
+
+    $("thClock").textContent = new Date(bars[Math.round(pos)].t).toISOString().replace("T", " ").slice(0, 16) + " UTC";
+  }
+
   // ------------------------------------------------------------- backtest
   function renderBacktest() {
     const bt = analysis && analysis.backtests && analysis.backtests[state.strat];
@@ -539,6 +885,19 @@
     } else alert("Save failed: " + j.reason);
   });
   loadRezConfig();
+
+  $("thPlay").addEventListener("click", theatrePlayPause);
+  $("thRender").addEventListener("click", runTheatreRender);
+  $("thSpeed").addEventListener("change", (e) => { state.theatre.speed = parseFloat(e.target.value || "4"); });
+  $("thScrub").addEventListener("input", (e) => {
+    if (!state.theatre.film || state.theatre.rendering) return;
+    stopTheatre();
+    const i = Math.min(state.theatre.film.meta.bars - 1, Number(e.target.value));
+    state.theatre.pos = i;
+    drawTheatre(state.theatre.film, i);
+    const sc = state.theatre.photons.byI.get(Math.round(i));
+    $("thSub").innerHTML = sceneLine(state.theatre.film, sc, Math.round(i));
+  });
 
   // pull latest spot quote every 10s while page open (cheap, no re-analysis)
   setInterval(async () => {

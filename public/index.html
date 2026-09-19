@@ -74,18 +74,56 @@
     <button class="mode-tab" data-mode="jiaYou">Jia You 加油</button>
     <button class="mode-tab" data-mode="oracle">Oracle</button>
     <button class="mode-tab" data-mode="reasoner">🧠 Reasoner</button>
+    <button class="mode-tab" data-mode="theatre">🎬 Theatre</button>
   </nav>
 
   <main class="layout">
     <section class="stage">
-      <div class="chartwrap">
+      <div id="theatreBox" class="theatre" hidden>
+        <div class="theatre-chartwrap">
+          <canvas id="theatreChart"></canvas>
+          <div id="thClock" class="th-clock">…</div>
+        </div>
+        <div class="theatre-ctl">
+          <button id="thPlay" class="th-btn">▶ Play</button>
+          <label class="th-lab">Speed
+            <select id="thSpeed">
+              <option value="0.5">0.5x</option>
+              <option value="1">1x</option>
+              <option value="4" selected>4x</option>
+              <option value="12">12x</option>
+              <option value="40">40x turbo</option>
+            </select>
+          </label>
+          <label class="th-lab">Start
+            <input id="thStart" type="date" />
+          </label>
+          <label class="th-lab">End
+            <input id="thEnd" type="date" />
+          </label>
+          <label class="th-lab th-ai" title="When a counter setup fires, the AI reasons about it with your LLM key (sparks add render time).">
+            <input id="thAi" type="checkbox" checked /> AI thinks
+          </label>
+          <label class="th-lab">Sparks
+            <select id="thSparks"><option>3</option><option selected>6</option><option>12</option></select>
+          </label>
+          <button id="thRender" class="btn">Render movie</button>
+        </div>
+        <div class="theatre-rail">
+          <div id="thProg" class="th-prog"><div id="thProgFill" class="th-prog-fill" style="width:0%"></div></div>
+          <div class="th-file" id="thFile"></div>
+          <input id="thScrub" type="range" min="0" max="1" step="1" value="0" />
+          <div id="thSub" class="th-sub">Set a start date and press Render movie. Grab popcorn.</div>
+        </div>
+      </div>
+      <div class="chartwrap" id="chartwrap">
         <canvas id="chart"></canvas>
         <div class="cross" id="cross"></div>
       </div>
-      <div class="subwrap">
+      <div class="subwrap" id="subwrap">
         <canvas id="indChart"></canvas>
       </div>
-      <div class="eqwrap">
+      <div class="eqwrap" id="eqwrap">
         <div class="bt-head">
           <span>Backtest - idealized result, no slippage</span>
           <div class="strat-btns" id="stratBtns">

@@ -100,6 +100,27 @@ GoldPsychoEA can execute ONLY Reasoner-approved brackets:
   4. The built-in counter engine is bypassed while InpUseReasoner
      is on: set it back to false to return to normal counter trades.
 
+THEATRE (the educational movie tab)
+-----------------------------------
+Watch the AI read gold in fast-forward. Pick a date range (default from
+May 2026 back to now), hit "Render movie", then press play - popcorn
+optional:
+  * The chart races by (speed 0.5x to turbo) with the clock stamping UTC
+    every bar. Scenes re-read structure, retail-pain stage, sessions,
+    ignition and levels roughly 48x/day.
+  * Each counter-setup fires a real decision: with your LLM key and
+    "AI thinks" ON, the Reasoner writes a short story + plan for THAT
+    moment (up to the Sparks budget - each is a real LLM call). Without
+    a key, the free structure engine fades the flush instead. Both are
+    named on screen - nothing is dressed up as clairvoyance.
+  * Paper/demo account: 0.1-lot, $10/point, bracket SL/TP, time-outs,
+    risk % from your Settings. The side panel logs every thought and
+    every trade + running paper P&L. SIMULATED ONLY - no orders ever.
+  * Needs ~90+ bars of history. Real MT5/Yahoo history is used when it
+    covers the range; otherwise a clearly-labelled SYNTHETIC film plays
+    (deterministic, stylised) so the movie always works to learn the
+    mechanics. Backtests are idealized (no slippage, whole-bar fills).
+
 THE COUNTER IDEA (Psych Counter / Superman / EA)
 ------------------------------------------------
 Retail traders hold losing positions to "maybe": added on at
@@ -159,6 +180,7 @@ FILES
   src/ai.js          adaptive AI (retrains every refresh)
   src/reasoner.js    LLM Reasoner (AI-thinking): context + plan + parse
   src/news.js        free RSS news headlines (Google/Yahoo, no keys)
+  src/replay.js      Theatre movie renderer (structure engine + LLM sparks)
   src/data.js        data provider: MT5 bridge > Yahoo > CSV > demo
   src/backtest.js    backtest engine + runPsychCounter + computeStage
   src/modes.js       core modes + tradePlan/blend/levels

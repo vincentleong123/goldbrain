@@ -8,6 +8,7 @@ const { getCandles, putUpload, listMt5Files, TF_MS } = require("./src/data");
 const { analyze } = require("./src/analyze");
 const { getNews } = require("./src/news");
 const { runReasoner, configStatus, saveConfig, chatReasoner } = require("./src/reasoner");
+const { renderMovie, replayMeta } = require("./src/replay");
 
 const TF_LABEL = { M1: "1m", M2: "2m", M5: "5m", M15: "15m", M30: "30m", H1: "1h", H4: "4h", D1: "1d" };
 
@@ -299,6 +300,49 @@ const server = http.createServer(async (req, res) => {
         });
       } catch (e) {
         res.write(`\n[reasoner chat error: ${String((e && e.message) || e)}]`);
+      }
+      if (!res.destroyed) res.end();
+      return;
+    }
+
+    // ------------------------------------------------ Theatre (replay movie)
+    if (p === "/api/replay/meta" && req.method === "GET") {
+      try {
+        const q = urlObj.searchParams;
+        const symbol = q.get("symbol") || "XAUUSD";
+        const tf = q.get("tf") || "M15";
+        const start = Math.max(1, parseInt(q.get("start") || String(Date.now() - 30 * 864e5), 10));
+        const end = Math.max(start, parseInt(q.get("end") || String(Date.now()), 10));
+        const m = await replayMeta(symbol, tf, start, end);
+        return sendJSON(res, 200, { ok: true, ...m, requestedStart: start, requestedEnd: end });
+      } catch (e) {
+        return sendJSON(res, 500, { ok: false, reason: String((e && e.message) || e) });
+      }
+    }
+
+    if (p === "/api/replay/render" && req.method === "GET") {
+      const q = urlObj.searchParams;
+      const symbol = q.get("symbol") || "XAUUSD";
+      const tf = q.get("tf") || "M15";
+      const start = Math.max(1, parseInt(q.get("start") || String(Date.now() - 30 * 864e5), 10));
+      const end = Math.max(start, parseInt(q.get("end") || String(Date.now()), 10));
+      const useReasoner = q.get("ai") === "1";
+      const sparks = parseInt(q.get("sparks") || "6", 10);
+      const riskPct = parseFloat(q.get("risk") || "1") || 1;
+      const rrTarget = parseFloat(q.get("rr") || "1.5") || 1.5;
+      const balance = parseFloat(q.get("balance") || "1000") || 1000;
+
+      res.setHeader("content-type", "text/plain; charset=utf-8");
+      res.writeHead(200);
+      try {
+        const film = await renderMovie(symbol, tf, start, end, { useReasoner, sparks, riskPct, rrTarget, balance }, {
+          onProgress(p, msg) {
+            if (!res.destroyed) res.write(JSON.stringify({ p: +(p * 100).toFixed(0), msg: String(msg || "") }) + "\n");
+          },
+        });
+        if (!res.destroyed) res.write(JSON.stringify({ done: true, film }) + "\n");
+      } catch (e) {
+        if (!res.destroyed) res.write(JSON.stringify({ error: String((e && e.message) || e) }) + "\n");
       }
       if (!res.destroyed) res.end();
       return;
