@@ -62,7 +62,7 @@ function analyze(candlesRaw, symbol, tf, bars, ui) {
 
   const backtests = {};
   for (const strat of ["trend", "meanrev", "breakout", "hybrid"]) {
-    backtests[strat] = runBacktest(candles, strat, ai.horizons);
+    backtests[strat] = runBacktest(candles, strat, ai.ok && ai.horizons ? ai.horizons : null);
   }
   const psych = runPsychCounter(candles);
   if (psych) backtests["psych"] = psych;
@@ -76,12 +76,15 @@ function analyze(candlesRaw, symbol, tf, bars, ui) {
 
   const aiTrace = (ai.trace || []).slice(-300).map((t) => ({ t: t.t, p: +t.p.toFixed(3) }));
 
+  const aiCtx = ai.ok && ai.horizons
+    ? ai
+    : { ok: false, verdict: null, horizons: { 1: null, 3: null, 6: null } };
   const modeCtx = {
     symbol, tf, bars: n, source: "", label: "",
     candles, price, prevClose: prev.c, changePct,
     session: sess,
     ind: { rsi: rsiNow, atr: atrNow, bbPos, macdHist: macdHistNow, emaSpeed, vwap: vwapNow, hi20, lo20, e20: e20Now, e50: e50Now },
-    sr, struct, patt, early, ai,
+    sr, struct, patt, early, ai: aiCtx,
     stage,
     btSummary: {
       psych: psych
@@ -123,9 +126,9 @@ function analyze(candlesRaw, symbol, tf, bars, ui) {
       ok: ai.ok,
       verdict: ai.verdict || null,
       horizons: {
-        1: ai.horizons[1] ? { probUp: +(ai.horizons[1].probUp || 0).toFixed(3), fwdAccuracy: +(ai.horizons[1].fwdAccuracy || 0.5).toFixed(3), fwdSize: ai.horizons[1].fwdSize || 0, samples: ai.horizons[1].samples || 0 } : null,
-        3: ai.horizons[3] ? { probUp: +(ai.horizons[3].probUp || 0).toFixed(3), fwdAccuracy: +(ai.horizons[3].fwdAccuracy || 0.5).toFixed(3) } : null,
-        6: ai.horizons[6] ? { probUp: +(ai.horizons[6].probUp || 0).toFixed(3), fwdAccuracy: +(ai.horizons[6].fwdAccuracy || 0.5).toFixed(3) } : null,
+        1: ai.horizons && ai.horizons[1] ? { probUp: +(ai.horizons[1].probUp || 0).toFixed(3), fwdAccuracy: +(ai.horizons[1].fwdAccuracy || 0.5).toFixed(3), fwdSize: ai.horizons[1].fwdSize || 0, samples: ai.horizons[1].samples || 0 } : null,
+        3: ai.horizons && ai.horizons[3] ? { probUp: +(ai.horizons[3].probUp || 0).toFixed(3), fwdAccuracy: +(ai.horizons[3].fwdAccuracy || 0.5).toFixed(3) } : null,
+        6: ai.horizons && ai.horizons[6] ? { probUp: +(ai.horizons[6].probUp || 0).toFixed(3), fwdAccuracy: +(ai.horizons[6].fwdAccuracy || 0.5).toFixed(3) } : null,
       },
       trace: aiTrace,
       dir: ai.verdict ? ai.verdict.dir : "side",

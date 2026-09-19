@@ -6,6 +6,8 @@ const path = require("path");
 const { URL } = require("url");
 const { getCandles, putUpload, listMt5Files, TF_MS } = require("./src/data");
 const { analyze } = require("./src/analyze");
+const { getNews } = require("./src/news");
+const { runReasoner, configStatus, saveConfig } = require("./src/reasoner");
 
 const TF_LABEL = { M1: "1m", M2: "2m", M5: "5m", M15: "15m", M30: "30m", H1: "1h", H4: "4h", D1: "1d" };
 
@@ -205,6 +207,60 @@ const server = http.createServer(async (req, res) => {
         equityPts: eqPts,
         trades: all,
       });
+    }
+
+    // ------------------------------------------------ Reasoner (AI thinking)
+    if (p === "/api/reasoner" && req.method === "GET") {
+      const { symbol, tf, bars, fresh, ui } = paramsOf(req, urlObj);
+      const force = req.url.includes("force=1") || fresh;
+      const key = `reasoner|${symbol}|${tf}|${bars}`;
+      const fn = async () => {
+        const dataRes = await getCandles(symbol, tf, bars);
+        const out = analyze(dataRes.candles, symbol, tf, bars, ui);
+        out.source = dataRes.source;
+        out.sourceLabel = dataRes.label;
+        out.dataNote = dataRes.note || "";
+        out.generatedAt = dataRes.generatedAt || Date.now();
+        out.account = ui;
+        let news = null;
+        try {
+          const n = await getNews();
+          news = n.items || [];
+        } catch {
+          news = [];
+        }
+        const rez = await runReasoner(out, { ui, news });
+        return { ...rez, symbol, tf };
+      };
+      if (force) {
+        const out = await fn();
+        cache.set(key, { t: Date.now(), data: out });
+        return sendJSON(res, 200, out);
+      }
+      const hit = cache.get(key);
+      if (hit && Date.now() - hit.t < TTL_ANALYSIS * 3) {
+        return sendJSON(res, 200, hit.data);
+      }
+      const out = await fn();
+      cache.set(key, { t: Date.now(), data: out });
+      return sendJSON(res, 200, out);
+    }
+
+    if (p === "/api/reasoner/config" && req.method === "GET") {
+      return sendJSON(res, 200, configStatus());
+    }
+
+    if (p === "/api/reasoner/config" && req.method === "POST") {
+      const chunks = [];
+      for await (const ck of req) chunks.push(ck);
+      let body;
+      try {
+        body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+      } catch {
+        return sendJSON(res, 400, { ok: false, reason: "bad JSON body" });
+      }
+      const r = saveConfig({ apiKey: body.apiKey, baseURL: body.baseURL, model: body.model });
+      return sendJSON(res, r.ok ? 200 : 400, r);
     }
 
     if (p === "/api/duel") {

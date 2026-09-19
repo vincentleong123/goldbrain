@@ -1,5 +1,8 @@
 node_modules/
 data/mt5/
+data/config.json
+data/news-cache.json
+data/reasoner-plan.json
+data/duel-*.json*
 gb_*.json
 *.log
-data/duel-*.json*

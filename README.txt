@@ -33,6 +33,34 @@ SIX MODES (tabs)
   Keep Going    - journal + burn-rate + per-side edge, so
                   persistence never becomes a losing loop.
   Jia You 加油  - warm, honest coach; one trade at a time.
+  Reasoner     - AI-TEXTBOOK MODE. Bring-your-own LLM. It READS a
+                 factual snapshot (structure, levels, retail-pain
+                 stage, session, risk budget) + LIVE NEWS headlines
+                 and REASONS to a decision - trade bracket, scenarios,
+                 invalidation, and honest "flat" calls. This is not the
+                 trained pattern-ML (QuantumLink); it is reasoning.
+
+THE REASONER (AI thinking, not pattern ML)
+------------------------------------------
+QuantumLink/backtests are traditional ML: features -> fit -> predict.
+The Reasoner replaces that decision step with an LLM that reasons:
+
+  1. Settings -> Reasoner -> paste your own provider API key
+     (OpenAI / DeepSeek / OpenRouter / Groq / Ollama local / Anthropic).
+     Key lives ONLY in data\config.json (gitignored) or env vars:
+       REASONER_API_KEY / REASONER_BASE_URL / REASONER_MODEL
+  2. Open the Reasoner tab -> click "Think now".
+  3. It bundles: price/S-R levels, session, retail-pain stage (the
+     genuinely original part of GoldBrain), idealized backtest memory,
+     your risk budget, and top ~8 news headlines (free RSS, no keys).
+  4. Prompt discipline: fade news-driven flushes, favour session
+     liquidity, real levels, hard stops, "flat" when conflicted.
+  5. Output is a reasoned bracket + scenarios + invalidation, written
+     to data\reasoner-plan.json (advisory only - IT NEVER TRADES).
+
+Caveats: the LLM reasons; it does not see the future. Headlines are
+unverified scrapes. Treat the output as a second opinion you verify,
+not an oracle. Always demo-first if you hand the plan to an EA.
 
 THE COUNTER IDEA (Psych Counter / Superman / EA)
 ------------------------------------------------
@@ -91,6 +119,8 @@ FILES
   src/mta.js         math utils            src/indicators.js   indicators
   src/patterns.js    candle/structure/early-move/session detection
   src/ai.js          adaptive AI (retrains every refresh)
+  src/reasoner.js    LLM Reasoner (AI-thinking): context + plan + parse
+  src/news.js        free RSS news headlines (Google/Yahoo, no keys)
   src/data.js        data provider: MT5 bridge > Yahoo > CSV > demo
   src/backtest.js    backtest engine + runPsychCounter + computeStage
   src/modes.js       core modes + tradePlan/blend/levels

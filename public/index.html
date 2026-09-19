@@ -73,6 +73,7 @@
     <button class="mode-tab" data-mode="keepGoing">Keep Going</button>
     <button class="mode-tab" data-mode="jiaYou">Jia You 加油</button>
     <button class="mode-tab" data-mode="oracle">Oracle</button>
+    <button class="mode-tab" data-mode="reasoner">🧠 Reasoner</button>
   </nav>
 
   <main class="layout">
@@ -117,6 +118,26 @@
       <div class="modal-actions">
         <button id="btnCsvGo" class="btn">Load CSV</button>
         <button id="btnCsvClose" class="btn ghost">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="rezModal" hidden>
+    <div class="modal-box">
+      <h3>🧠 Reasoner settings</h3>
+      <p>Bring your own LLM key. Stored only in <code>data/config.json</code> on this PC (gitignored, never leaves your machine). Works with any OpenAI-compatible endpoint (OpenAI, DeepSeek, OpenRouter, Ollama, LM Studio, Groq) and Anthropic.</p>
+      <label class="cfg-label">API key
+        <input id="rezKey" type="password" placeholder="sk-... (or set REASONER_API_KEY env var)" autocomplete="off" />
+      </label>
+      <label class="cfg-label">Base URL (optional)
+        <input id="rezBase" type="text" placeholder="empty = provider default" />
+      </label>
+      <label class="cfg-label">Model (optional)
+        <input id="rezModel" type="text" placeholder="empty = provider default" />
+      </label>
+      <div class="modal-actions">
+        <button id="btnRezSave" class="btn">Save settings</button>
+        <button id="btnRezClose" class="btn ghost">Close</button>
       </div>
     </div>
   </div>

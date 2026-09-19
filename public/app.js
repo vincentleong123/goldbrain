@@ -98,12 +98,18 @@
       t.classList.add("active");
       state.mode = t.dataset.mode;
       renderModeTab();
+      if (state.mode === "reasoner") {
+        if (!state.reasoner && state.rezConfig && state.rezConfig.configured) runReasonerNow(false);
+        else if (!state.reasoner && !(state.rezConfig && state.rezConfig.configured)) loadRezConfig().then(() => renderModeTab());
+        else if (state.reasoner && state.rezConfig && state.rezConfig.configured && Date.now() - rezLoadedAt > 60000) runReasonerNow(false);
+      }
     })
   );
 
   const SENT_LABEL = { bullish: "up", bearish: "down", neutral: "side", warning: "warn", info: "info" };
 
   function renderModeTab() {
+    if (state.mode === "reasoner") { renderReasoner(); return; }
     const m = analysis && analysis.modes[state.mode];
     if (!m) { $("verdict").innerHTML = "<div class='v-summary'>Loading…</div>"; return; }
     const tone = SENT_LABEL[m.sentiment] || "info";
@@ -140,6 +146,134 @@
       html += "</div>";
     }
     $("verdict").innerHTML = html;
+  }
+
+  // ------------------------------------------------------- Reasoner (AI thinking)
+  const SENT2 = { long: "bullish", short: "bearish", flat: "neutral" };
+  state.reasoner = null;
+  state.rezConfig = null;
+  state.rezRunning = false;
+  let rezLoadedAt = 0;
+
+  async function loadRezConfig() {
+    try {
+      const r = await fetch("/api/reasoner/config");
+      if (r.ok) state.rezConfig = await r.json();
+    } catch { state.rezConfig = null; }
+  }
+
+  function openRezModal() {
+    const c = state.rezConfig || {};
+    $("rezKey").value = c.configured ? "(saved)" : "";
+    $("rezBase").value = c.baseURL && !/anthropic|openai/i.test(c.baseURL) ? c.baseURL : (c.baseURL || "");
+    $("rezModel").value = c.model && !/gpt-4o-mini|claude-3-5-haiku/i.test(c.model) ? c.model : (c.model || "");
+    $("rezModal").hidden = false;
+  }
+
+  function renderReasoner() {
+    const rz = state.reasoner;
+    const cfg = state.rezConfig;
+    let html = `<div class="v-title">🧠 Reasoner · AI thinking on your snapshot</div>`;
+
+    if (!cfg || !cfg.configured) {
+      html += `<div class="v-headline warning">No AI provider configured yet.</div>`;
+      html += `<div class="v-summary">The Reasoner reads your live chart snapshot + news headlines and REASONS to a decision (structure, retail-pain stage, session, risk budget). No prediction magic - honest reasoning, and 'flat' is a valid answer.<br><br>Set your own LLM key (OpenAI / DeepSeek / OpenRouter / Ollama / Anthropic). Stored locally in data/config.json.</div>`;
+      html += `<button id="btnRezOpen" class="btn">Configure AI provider</button>`;
+      $("verdict").innerHTML = html;
+      $("btnRezOpen").addEventListener("click", openRezModal);
+      return;
+    }
+
+    html += `<div class="v-headline ${SENT2[rz && rz.plan && rz.plan.direction] || 'info'}">${
+      rz
+        ? (rz.plan.direction === "flat" ? "STAY FLAT — " : rz.plan.direction.toUpperCase() + " bias ") + " · conviction " + Math.round((rz.plan.conviction || 0) * 100) + "%"
+        : "Ready. Click think to analyse this snapshot."
+    }</div>`;
+    if (rz) {
+      html += `<div class="v-summary">model ${esc(rz.model)} · ${(rz.ms / 1000).toFixed(1)}s · ${esc(rz.sourceLabel || "")} · news ${rz.newsUsed}</div>`;
+    }
+
+    html += '<div class="rez-actions">';
+    html += `<button id="btnRezThink" class="btn" ${state.rezRunning ? "disabled" : ""}>${state.rezRunning ? "Thinking…" : (rz ? "Think again" : "🧠 Think now")}</button>`;
+    html += `<button id="btnRezSet" class="btn ghost">Settings</button>`;
+    html += "</div>";
+
+    if (rz && rz.ok === false) {
+      html += `<div class="v-warning" style="margin-top:8px">⚠ ${esc(rz.message || rz.reason || "reasoner failed")}</div>`;
+      if (rz.reason === "not-configured") html += `<div class="v-summary">Get a key from your provider and paste it here.</div>`;
+    }
+
+    if (rz && rz.plan) {
+      const pl = rz.plan;
+      if (pl.ok === false) {
+        html += `<div class="v-warning" style="margin-top:8px">⚠ Plan rejected: ${esc(pl.reason)}</div>`;
+      }
+      if (pl.direction === "flat") {
+        html += `<div class="v-summary">${esc(pl.reason && pl.reason[0] ? pl.reason.join(" · ") : "No edge found. The most profitable trade is often the one you don't take.")}</div>`;
+      } else if (pl.ok) {
+        html += '<div class="v-cards">';
+        html += `<div class="v-card"><div class="lbl">Entry</div><div class="val">${fmt(pl.entry, 2)}</div><div class="hint">market</div></div>`;
+        html += `<div class="v-card"><div class="lbl">Stop</div><div class="val">${fmt(pl.stop, 2)}</div><div class="hint">hard, structural</div></div>`;
+        html += `<div class="v-card"><div class="lbl">Target</div><div class="val">${fmt(pl.target, 2)}</div><div class="hint">level / RR ${fmt(pl.rr, 2)}</div></div>`;
+        html += `<div class="v-card"><div class="lbl">Conviction</div><div class="val">${Math.round(pl.conviction * 100)}%</div><div class="hint">${esc(rz.confidence || "")}</div></div>`;
+        html += '</div>';
+        if (pl.sizeNote) html += `<div class="v-summary">Sizing: ${esc(pl.sizeNote)}</div>`;
+      }
+      if (pl.reason && pl.reason.length) {
+        html += '<div class="v-bullets">';
+        for (const b of pl.reason) html += `<div class="v-bullet"><span class="dot info"></span><span>${esc(b)}</span></div>`;
+        html += "</div>";
+      }
+      if (pl.dominatedBy && pl.dominatedBy.length) {
+        html += '<div class="v-levels">' + pl.dominatedBy.map((d) => `<span class="level-chip">${esc(d)}</span>`).join("") + "</div>";
+      }
+      if (pl.scenarioBull || pl.scenarioBase || pl.scenarioBear) {
+        const sc = (lbl, tone, s) => s && typeof s === "object"
+          ? `<div class="rez-scen ${tone}"><b>${lbl}:</b> ${esc(s.target !== undefined && s.target !== null ? s.target + " · " : "")}${esc(s.trigger || "")}</div>`
+          : "";
+        html += '<div class="v-summary" style="margin-top:6px">Scenarios</div>';
+        html += sc("Bull", "up", pl.scenarioBull) + sc("Base", "info", pl.scenarioBase) + sc("Bear", "down", pl.scenarioBear);
+      }
+      if (pl.invalidation) html += `<div class="v-bullet"><span class="dot warn"></span><span><b>Invalid:</b> ${esc(pl.invalidation)}</span></div>`;
+      if (pl.risks && pl.risks.length) {
+        html += '<div class="v-warnings">';
+        for (const w of pl.risks) html += `<div class="v-warning">⚠ ${esc(w)}</div>`;
+        html += "</div>";
+      }
+    }
+
+    if (rz && rz.warnings && rz.warnings.length) {
+      html += '<div class="v-warnings" style="margin-top:8px">';
+      for (const w of rz.warnings) html += `<div class="v-warning">⚠ ${esc(w)}</div>`;
+      html += "</div>";
+    }
+
+    if (rz && rz.ok) html += `<div class="v-summary" style="font-size:11px">Reasoner = reasoning advisor, NOT a predictor and NOT an order sender. It writes data/reasoner-plan.json (advisory) for the EA. Verify with your own eyes. Generated ${new Date(rz.generatedAt).toLocaleTimeString()}.</div>`;
+
+    $("verdict").innerHTML = html;
+    const think = $("btnRezThink");
+    if (think) think.addEventListener("click", () => runReasonerNow(true));
+    const set = $("btnRezSet");
+    if (set) set.addEventListener("click", openRezModal);
+  }
+
+  async function runReasonerNow(force) {
+    if (state.rezRunning) return;
+    state.rezRunning = true;
+    renderReasoner();
+    try {
+      const url = "/api/reasoner?" + qs() + (force ? "&force=1" : "");
+      const r = await fetch(url);
+      if (!r.ok) throw new Error("Server " + r.status);
+      state.reasoner = await r.json();
+      rezLoadedAt = Date.now();
+      renderReasoner();
+    } catch (e) {
+      state.reasoner = { ok: false, reason: "fetch-error", message: e.message };
+      renderReasoner();
+    } finally {
+      state.rezRunning = false;
+    }
   }
 
   // ------------------------------------------------------------- backtest
@@ -249,6 +383,27 @@
   // ------------------------------------------------------------- boot
   loadAccount();
   GBChart.init($("chart"), $("indChart"), $("eqChart"));
+
+  $("btnRezClose").addEventListener("click", () => { $("rezModal").hidden = true; });
+  $("btnRezSave").addEventListener("click", async () => {
+    const key = $("rezKey").value.trim();
+    if (key === "(saved)") { $("rezModal").hidden = true; return; }
+    if (!key) { alert("Paste an API key (or keep '(saved)' and change base/model)."); return; }
+    const body = JSON.stringify({
+      apiKey: key,
+      baseURL: $("rezBase").value.trim(),
+      model: $("rezModel").value.trim(),
+    });
+    const r = await fetch("/api/reasoner/config", { method: "POST", headers: { "content-type": "application/json" }, body });
+    const j = await r.json();
+    if (j.ok) {
+      state.rezConfig = j;
+      $("rezModal").hidden = true;
+      alert("Saved. Reasoner is ready - click 🧠 Think now.");
+      renderModeTab();
+    } else alert("Save failed: " + j.reason);
+  });
+  loadRezConfig();
 
   // pull latest spot quote every 10s while page open (cheap, no re-analysis)
   setInterval(async () => {
