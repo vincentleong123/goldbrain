@@ -9,6 +9,39 @@ RUN
   start.bat   (or)   node server.js
 Then open  http://127.0.0.1:8765  (browser opens automatically).
 
+HOW TO USE (quick walkthrough)
+------------------------------
+  1. Run and open the dashboard (above). The Expert tab is the default.
+     Top bar: pick symbol/timeframe (M1..D1) + your paper account
+     balance/risk %, then load analysis (retrains every refresh).
+  2. The tabs are different lenses on the SAME snapshot:
+       Expert / Psychic Power / Superman / Think Tank / Keep Going /
+       Jia You 加油 / Oracle  -> classic engines and personas.
+       🧠 Reasoner            -> LLM "AI-thinking" brain (bring a key).
+       🎬 Theatre             -> the educational MOVIE mode.
+  3. Reasoner (AI thinking):
+       Settings -> Reasoner -> paste your own LLM API key
+       (OpenAI / DeepSeek / OpenRouter / Groq / Ollama local / Anthropic).
+       The key lives only in data\config.json on this PC (gitignored),
+       or use env vars REASONER_API_KEY / REASONER_BASE_URL / REASONER_MODEL.
+       Then open the Reasoner tab -> "Think now". It reads a factual
+       snapshot + live news RSS and writes an honest plan (advisory only).
+  4. Learn + chat (educational):
+       "Learn the lingo" opens the Learning Deck (glossary explained with
+       today's real numbers). "Discovery chat" lets you ask the AI
+       anything about the live snapshot - replies stream in.
+  5. Theatre (the movie):
+       a) Pick a Start date (default May 2026) and End date (today).
+       b) Optional: tick "AI thinks" to have the Reasoner reason at each
+          counter-setup (Sparks = how many real LLM calls; off/0 = free
+          local structure engine instead - still works without any key).
+       c) Press "Render movie" and wait for the progress bar.
+       d) Press Play. Watch the fast-forwarded chart, the thinking text,
+          and PAPER trades on a demo account. SIMULATED ONLY - no orders.
+  6. EA handoff (auto-trading, demo-first):
+       mql5\GoldPsychoEA.mq5 can trade ONLY Reasoner-approved plans.
+       See "EA PLAN HANDOFF" below for the full steps.
+
 WHAT IT DOES
 ------------
 * Pulls real gold candles: XM MT5 bridge > Yahoo (GC=F gold
