@@ -320,6 +320,7 @@ function runPsychCounter(candles, opts = {}) {
       ["TP at anchor reached", trades.length ? trades.filter((t) => t.tpAnchorDone).length + " of " + trades.length : "–"],
       ["Violence-filtered", "knife flushes skipped"],
     ],
+    ...(opts.detail ? { fullTrades: trades } : {}),
   };
 }
 
@@ -398,7 +399,7 @@ const PRESETS = {
   hybrid: { name: "Hybrid + AI gate", note: "Trend signal, but only when the adaptive model agrees (p>0.52)." },
 };
 
-function runBacktest(candles, strategy, aiModels = null) {
+function runBacktest(candles, strategy, aiModels = null, opts = {}) {
   const n = candles.length;
   const closes = candles.map((c) => c.c);
   const e20 = ema(closes, 20);
@@ -514,6 +515,7 @@ function runBacktest(candles, strategy, aiModels = null) {
     lastTrades: trades.slice(-6),
     equitySeries: equity.filter((_, i) => i % 4 === 0),
     equityStart: startEq,
+    ...(opts.detail ? { fullTrades: trades } : {}),
   };
 }
 

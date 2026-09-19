@@ -4,8 +4,10 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const { URL } = require("url");
-const { getCandles, putUpload, listMt5Files } = require("./src/data");
+const { getCandles, putUpload, listMt5Files, TF_MS } = require("./src/data");
 const { analyze } = require("./src/analyze");
+
+const TF_LABEL = { M1: "1m", M2: "2m", M5: "5m", M15: "15m", M30: "30m", H1: "1h", H4: "4h", D1: "1d" };
 
 const PORT = 8765;
 const HOST = "127.0.0.1";
@@ -33,7 +35,7 @@ function cached(key, ttlMs, fn) {
 const TTL_ANALYSIS = 25000;
 
 const SYMBOLS = ["XAUUSD", "XAUUSDm", "GOLD"];
-const TFS = ["M1", "M5", "M15", "H1", "H4", "D1"];
+const TFS = ["M1", "M2", "M5", "M15", "M30", "H1", "H4", "D1"];
 
 function paramsOf(req, urlObj) {
   const q = urlObj.searchParams;
@@ -72,9 +74,15 @@ const server = http.createServer(async (req, res) => {
 
     if (p === "/api/sources") {
       const files = listMt5Files();
+      let accountFile = null;
+      try {
+        const accPath = path.join(__dirname, "data", "mt5", "account.json");
+        if (fs.existsSync(accPath)) accountFile = JSON.parse(fs.readFileSync(accPath, "utf8"));
+      } catch { accountFile = null; }
       return sendJSON(res, 200, {
         mt5: files.length > 0,
         mt5Files: files.slice(0, 20),
+        account: accountFile,
         yahoo: true, // availability tested lazily at analysis time
         csvUploads: 0,
         now: Date.now(),
@@ -127,6 +135,86 @@ const server = http.createServer(async (req, res) => {
         return sendJSON(res, 200, { ok: true, ...r });
       }
       return sendJSON(res, 400, { ok: false, reason: r.reason });
+    }
+
+    if (p === "/api/playback") {
+      const { trainAndPredict } = require("./src/ai");
+      const { runBacktest, runPsychCounter } = require("./src/backtest");
+      const { runCrowd } = require("./src/duel");
+      const { ema } = require("./src/indicators");
+      const q = urlObj.searchParams;
+      const symbol = (q.get("symbol") || "XAUUSD").toUpperCase();
+      const tf = (q.get("tf") || "M5").toUpperCase();
+      const stratRaw = (q.get("strat") || "crowd").toLowerCase();
+      const years = parseFloat(q.get("years") || "0");
+      const barsArg = parseInt(q.get("bars") || "0", 10) || 0;
+      const useSym = SYMBOLS.includes(symbol) ? symbol : "XAUUSD";
+      const useTf = TFS.includes(tf) ? tf : "M5";
+      const strats = ["crowd", "psych", "trend", "meanrev", "breakout", "hybrid"];
+      const strat = strats.includes(stratRaw) ? stratRaw : "crowd";
+      let bars = barsArg > 0 ? barsArg : years > 0 ? Math.ceil((years * 365 * 86400e3) / TF_MS[useTf]) : 3000;
+      bars = Math.max(120, Math.min(bars, 20000));
+      const t0 = Date.now();
+      const dataRes = await getCandles(useSym, useTf, bars, { allowBig: true });
+      const candles = dataRes.candles;
+      const engineOpts = { detail: true };
+      let engineRes;
+      if (strat === "crowd") engineRes = runCrowd(candles, engineOpts);
+      else if (strat === "psych") engineRes = runPsychCounter(candles, engineOpts);
+      else {
+        let aiModels = null;
+        if (strat === "hybrid") aiModels = trainAndPredict(candles, Math.min(1800, candles.length)).horizons;
+        engineRes = runBacktest(candles, strat, aiModels, engineOpts);
+      }
+      const all = (engineRes && engineRes.fullTrades || [])
+        .map((t) => ({
+          side: t.side,
+          entryBar: t.entryBar !== undefined ? t.entryBar : t.entryI,
+          exitBar: t.exitBar !== undefined ? t.exitBar : t.exitI,
+          entry: t.entry, exit: t.exit, pnlUsd: t.pnlUsd, reason: t.reason,
+          units: t.units || 1, adds: t.adds || 0, drawAtr: t.drawAtr || 0,
+        }))
+        .filter((t) => isFinite(t.exitBar) && isFinite(t.entryBar));
+      const startEq = 10000;
+      const eqPts = [{ bar: 0, eq: startEq }];
+      let run = startEq;
+      for (const t of all) { run += t.pnlUsd; eqPts.push({ bar: t.exitBar, eq: +run.toFixed(2) }); }
+      const closes = candles.map((c) => c.c);
+      const e20 = ema(closes, 20);
+      const e50 = ema(closes, 50);
+      const round = (v) => (v === null || v === undefined || !isFinite(v) ? null : +v.toFixed(2));
+      const cl = candles.map((c) => ({ t: c.t, o: round(c.o), h: round(c.h), l: round(c.l), c: round(c.c), v: c.v || 0 }));
+      const winsRes = all.filter((t) => t.pnlUsd > 0);
+      const lossesRes = all.filter((t) => t.pnlUsd <= 0);
+      const netUsd = +(engineRes && engineRes.netUsd || 0).toFixed(2);
+      return sendJSON(res, 200, {
+        ok: true, symbol: useSym, tf: useTf, tfLabel: TF_LABEL[useTf], strat,
+        engineName: (engineRes && (engineRes.presetInfo && engineRes.presetInfo.name || engineRes.name)) || strat,
+        source: dataRes.source, sourceLabel: dataRes.label, dataNote: dataRes.note || "",
+        bars: cl.length, startTime: cl[0] && cl[0].t, endTime: cl[cl.length - 1] && cl[cl.length - 1].t,
+        equityStart: startEq, tradeCount: all.length,
+        wins: winsRes.length, losses: lossesRes.length,
+        winRate: all.length ? winsRes.length / all.length : 0,
+        finalPnl: netUsd, finalEquity: +(startEq + netUsd).toFixed(2),
+        maxDrawdown: engineRes ? engineRes.maxDrawdown : 0,
+        profitFactor: engineRes ? engineRes.profitFactor : 0,
+        computeMs: Date.now() - t0,
+        candles: cl,
+        ema20: e20.slice(-cl.length).map(round),
+        ema50: e50.slice(-cl.length).map(round),
+        equityPts: eqPts,
+        trades: all,
+      });
+    }
+
+    if (p === "/api/duel") {
+      try {
+        const fp = path.join(__dirname, "data", "duel-latest.json");
+        if (!fs.existsSync(fp)) return sendJSON(res, 404, { ok: false, reason: "no duel run yet - start run-duel.js" });
+        return sendJSON(res, 200, JSON.parse(fs.readFileSync(fp, "utf8")));
+      } catch (e) {
+        return sendJSON(res, 500, { ok: false, reason: String((e && e.message) || e) });
+      }
     }
 
     return sendJSON(res, 404, { ok: false, reason: "not found" });

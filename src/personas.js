@@ -212,4 +212,108 @@ modes.jiaYou = function jiaYou(ctx, ui) {
   };
 };
 
+// ------------------------------------------------------------- ORACLE (FAST MONEY TRADER)
+// Reads the probability oracle + retail-pain stages and trades FAST: in and out
+// before the crowd wakes, tight stop, quick target, active-session-only, and it
+// KNOWS where stop-loss hunts live (the anchor = the crowd's breakeven).
+modes.oracle = function oracle(ctx, ui) {
+  const h1 = ctx.ai.horizons[1], h3 = ctx.ai.horizons[3], h6 = ctx.ai.horizons[6];
+  const f = (x) => (x && x.ok ? (x.probUp * 100).toFixed(0) + "%" : "-");
+  const acc = h1 && h1.ok ? Math.round(h1.fwdAccuracy * 100) : null;
+  const b = blend(ctx);
+  const st = ctx.stage;
+  const atr = ctx.ind.atr || 0.0001;
+  const price = ctx.price;
+  const sess = ctx.session;
+
+  const active = !!sess.active;
+  const h1Up = h1 && h1.ok ? h1.probUp : 0.5;
+  const oracleBias = h1Up > 0.55 ? "long" : h1Up < 0.45 ? "short" : "side";
+  const blendBias = b.score > 0.12 ? "long" : b.score < -0.12 ? "short" : "side";
+  const fastSide = oracleBias === blendBias ? oracleBias : blendBias !== "side" ? blendBias : oracleBias;
+
+  // fast-money bracket: tight stop, quick target, no holding
+  function fastPlan(side) {
+    const stopDist = clamp(atr * 0.6, price * 0.00035, atr * 1.0);
+    const stop = side === "long" ? price - stopDist : price + stopDist;
+    const tgtDist = atr * 1.0;
+    const target = side === "long"
+      ? Math.min(ctx.sr.nearestResistance || Infinity, price + tgtDist)
+      : Math.max(ctx.sr.nearestSupport || -Infinity, price - tgtDist);
+    const rr = Math.abs(target - price) / stopDist;
+    const riskDol = (ui.balance || 1000) * clamp(ui.riskPct || 1, 0.05, 5) / 100;
+    const lots = clamp(riskDol / (stopDist * 100), 0.01, 5);
+    return { side, entry: price, stop: +stop.toFixed(2), target: +target.toFixed(2), stopPts: +stopDist.toFixed(2), rr: +rr.toFixed(2), lots: +lots.toFixed(2), riskDol: +riskDol.toFixed(2) };
+  }
+
+  // stop-hunt read: the anchor IS where the crowd's stop-losses cluster
+  let huntNote;
+  if (st && st.anchor) {
+    huntNote = st.bias === "long"
+      ? `Stop-hunt map: the crowd is underwater below the anchor ${st.anchor.toFixed(2)} - their stops cluster just under it, which is why it "grabs the money and stops" right there.`
+      : `Stop-hunt map: the crowd is underwater above the anchor ${st.anchor.toFixed(2)} - their stops cluster just over it, that's the grab point.`;
+  } else {
+    huntNote = "Stop-hunt map: no deep retail pain right now - hunters have no obvious target, which makes fast chasing dangerous.";
+  }
+
+  const counterFire = !!(st && st.entryReady);
+  const fire = active && (h1Up > 0.55 || h1Up < 0.45 || counterFire || Math.abs(b.score) > 0.18);
+  if (!fire) {
+    return {
+      title: "Oracle - fast money trader",
+      headline: "Oracle says: hold your fire. Fast money goes nowhere today.",
+      sentiment: "info",
+      summary: `The oracle reads ${h1Up >= 0.55 ? "up-pulse" : h1Up <= 0.45 ? "down-pulse" : "a coin-flip"} with ${h1 && h1.fwdAccuracy ? Math.round(h1.fwdAccuracy * 100) : "low"}% recent honesty${active ? " in an ACTIVE session" : ", but the session is dead"}. Blink, don't swing. ${huntNote}`,
+      cards: [
+        { label: "Oracle P(up) 1/3/6", value: `${f(h1)} / ${f(h3)} / ${f(h6)}`, hint: "fast / quick / swing" },
+        { label: "Session", value: sess.name, hint: active ? "active = fast-friendly" : "dead - no fast money" },
+        { label: "Blend", value: (b.score * 100).toFixed(0), hint: b.sentiment },
+        { label: "Pain stage", value: st ? st.depthAtr.toFixed(2) + " ATR" : "-", hint: st && st.exhaustion ? "exhaustion near" : "no flush" },
+        { label: "Volatility", value: Math.max(1, Math.round((ctx.ind.hi20 - ctx.ind.lo20) / atr)) + "x ATR/20b", hint: "range clamp" },
+      ],
+      bullets: [
+        { text: `Why no fast money: ${active ? "probabilities are a coin-flip and blend is " + b.sentiment : "liquidity is dead (dead session = spread + slippage tax on every fast exit)."}`, tone: "warn" },
+        { text: "Set alerts and let the hunt come to you - the oracle is paid in patience when it says wait.", tone: "info" },
+        { text: `Invalidate the wait at ${ctx.sr.nearestSupport || "support"} (down) / ${ctx.sr.nearestResistance || "resistance"} (up).`, tone: "side" },
+      ],
+      levels: levelsMap(ctx),
+      warnings: ["Oracle odds near 50% = noise. Wait, don't force. Fast money protects the account first."],
+    };
+  }
+
+  const plan = fastPlan(fastSide);
+  const oracleLine = `${fastSide.toUpperCase()} fast. Entry ${plan.entry.toFixed(2)}, stop ${plan.stop} (${plan.stopPts} pts), target ${plan.target} (RR ${plan.rr}).`;
+  const counterLine = counterFire
+    ? `CROWD IS UNDERWATER - the oracle fades the flush ${st.bias === "long" ? "long" : "short"} exactly where their stop-hunt grabs them; enter after the exhaustion pin, not into the knife.`
+    : `No liquidation-stage setup right now - this is a clean-session momentum fast trade, keep the stop tight.`;
+  return {
+    title: "Oracle - fast money trader",
+    headline: `ORACLE CALL: ${fastSide.toUpperCase()} - in and out fast, before the crowd blinks.`,
+    sentiment: fastSide === "long" ? "bullish" : fastSide === "short" ? "bearish" : "neutral",
+    summary: `${oracleLine} ${counterLine} ${huntNote} Confidence decays fast: this is a next-bars trade, not a thesis.`,
+    cards: [
+      { label: "Oracle P(up) 1/3/6", value: `${f(h1)} / ${f(h3)} / ${f(h6)}`, hint: "fast / quick / swing" },
+      { label: "Fast entry", value: plan.entry.toFixed(2), hint: fastSide },
+      { label: "Fast stop", value: plan.stop, hint: plan.stopPts + " pts - tight" },
+      { label: "Fast target", value: plan.target, hint: "RR " + plan.rr },
+      { label: "Size", value: plan.lots + " lots", hint: "$" + plan.riskDol + " risk" },
+      { label: "Session", value: sess.name, hint: "active - good to run" },
+      { label: "Pain stage", value: st ? st.depthAtr.toFixed(2) + " ATR" : "-", hint: st && st.exhaustion ? "pin SEEN" : "no flush" },
+    ],
+    bullets: [
+      { text: oracleLine, tone: fastSide === "long" ? "up" : "down" },
+      { text: counterLine, tone: counterFire ? "up" : "info" },
+      { text: `Exit rule: gone by ${ctx.tf === "M1" ? "15-20 minutes" : ctx.tf === "M5" ? "3-4 bars" : "next session close"} - fast money never marries a position.`, tone: "warn" },
+      { text: `Honesty: recent forward hit-rate is ${acc === null ? "n/a" : acc + "%"}. ${acc !== null && acc < 55 ? "Oracle is guessing now - halve size and trust the stop." : "Useable - still stop everything."}`, tone: acc !== null && acc < 55 ? "warn" : "info" },
+      { text: "Spread tax: every fast round-trip pays spread twice. On a dead session that tax eats the edge - that's why we only run when it's active.", tone: "info" },
+    ],
+    levels: {
+      stop: { price: plan.stop, label: "Fast stop" },
+      target: { price: plan.target, label: "Fast target" },
+      ...levelsMap(ctx),
+    },
+    warnings: ["Fast money = fast stops. If it's not working in a few bars, it's out. No averaging down, ever."],
+  };
+};
+
 module.exports = { modes };

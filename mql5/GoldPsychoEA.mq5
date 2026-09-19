@@ -344,7 +344,7 @@ void TryOpen()
    double spreadPts = (ask - bid) / SymbolInfoDouble(g_sym, SYMBOL_POINT);
    if(spreadPts > InpMaxSpread) { Print("spread ", DoubleToString(spreadPts,1), " pts - skip."); return; }
 
-   ENUM_POSITION_TYPE dir = (bias > 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+   ENUM_ORDER_TYPE dir = (bias > 0) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
    double entry   = (dir == POSITION_TYPE_BUY) ? ask : bid;
    double sl      = (dir == POSITION_TYPE_BUY) ? entry - stopDist : entry + stopDist;
    // anchor is the swing extreme = the level we bank HALF at (their breakeven);

@@ -7,9 +7,32 @@ const { toMs } = require("./mta");
 
 const DATA_FOLDER = path.join(__dirname, "..", "data", "mt5");
 
-const TF_MS = { M1: 60e3, M5: 5 * 60e3, M15: 15 * 60e3, H1: 3600e3, H4: 4 * 3600e3, D1: 86400e3 };
+const TF_MS = { M1: 60e3, M2: 120e3, M5: 5 * 60e3, M15: 15 * 60e3, M30: 30 * 60e3, H1: 3600e3, H4: 4 * 3600e3, D1: 86400e3 };
 
 const YAHOO_INTERVAL = { M1: "1m", M5: "5m", M15: "15m", H1: "60m", H4: "60m", D1: "1d" };
+
+// Timeframes Yahoo can't serve directly are resampled from a lower source TF.
+const TF_SRC = { M2: "M1", M30: "M15" };
+
+function resample(candles, outMs) {
+  const out = [];
+  let cur = null;
+  const V = (x) => Math.round(x || 0);
+  for (const b of candles) {
+    const bucket = Math.floor(b.t / outMs) * outMs;
+    if (!cur || cur.t !== bucket) {
+      if (cur) out.push(cur);
+      cur = { t: bucket, o: b.o, h: b.h, l: b.l, c: b.c, v: V(b.v) };
+    } else {
+      cur.h = Math.max(cur.h, b.h);
+      cur.l = Math.min(cur.l, b.l);
+      cur.c = b.c;
+      cur.v += V(b.v);
+    }
+  }
+  if (cur) out.push(cur);
+  return out;
+}
 
 const uploads = new Map(); // "SYM|TF" -> candles
 
@@ -111,21 +134,27 @@ async function yahooFetch(symbols, interval, range) {
 
 async function getYahoo(symbol, tf, bars) {
   const ms = TF_MS[tf] || 60000;
+  const srcTf = TF_SRC[tf] || tf;
+  const interval = srcTf === "M1" ? "1m" : YAHOO_INTERVAL[srcTf];
+  if (!interval) return null;
   // M1 is only reliable on range=5d on Yahoo; 1d returns a broken payload.
   let range;
-  if (tf === "M1") range = "5d";
+  if (srcTf === "M1") range = "5d";
   else range = pickRange(Math.ceil((bars * ms) / 60000) + 120);
-  const interval = YAHOO_INTERVAL[tf];
   // reuse the symbol that last worked for this timeframe
   const known = yahooQuoteHits.get(tf);
   const base = ["XAUUSD=X", "GC=F"];
   const candSyms = known ? [known, ...base.filter((s) => s !== known)] : base;
-  const got = await yahooFetch(candSyms, interval, range);
+  let got = await yahooFetch(candSyms, interval, range);
   if (!got) {
     const bigger = pickRange(1e12);
     const got2 = await yahooFetch(candSyms, interval, bigger);
     if (!got2) return null;
-    return build(got2, bars, tf);
+    got = got2;
+  }
+  if (srcTf !== tf) {
+    const orig = got;
+    got = { symbol: orig.symbol, candles: resample(orig.candles, ms) };
   }
   return build(got, bars, tf);
 }
@@ -133,10 +162,13 @@ function build(got, bars, tf) {
   yahooQuoteHits.set(tf, got.symbol);
   const candles = got.candles.slice(-bars);
   const isFutures = got.symbol !== "XAUUSD=X";
+  const srcTf = TF_SRC[tf];
   return {
     candles,
     source: isFutures ? "yahoo-futures" : "yahoo",
-    note: isFutures ? "Using COMEX gold futures (GC=F) - tracks spot XAUUSD closely." : "Live spot gold feed (XAUUSD=X).",
+    note: srcTf
+      ? (isFutures ? "Using COMEX gold futures (GC=F) resampled " : "Live spot gold feed (XAUUSD=X) resampled ") + srcTf + " -> " + tf + "."
+      : isFutures ? "Using COMEX gold futures (GC=F) - tracks spot XAUUSD closely." : "Live spot gold feed (XAUUSD=X).",
   };
 }
 
@@ -221,7 +253,7 @@ function getSynthetic(bars) {
 
 // ---------------------------------------------------------------- Main selector
 async function getCandles(symbol, tf, bars, opts = {}) {
-  const B = Math.min(Math.max(bars || 300, 40), 5000);
+  const B = Math.min(Math.max(bars || 300, 40), opts.allowBig ? 20000 : 5000);
   // 1. MT5 bridge
   if (!opts.noMt5) {
     const mt5 = getMt5(symbol, tf);
@@ -258,4 +290,4 @@ async function getCandles(symbol, tf, bars, opts = {}) {
   };
 }
 
-module.exports = { getCandles, putUpload, listMt5Files, TF_MS, parseMT4CSV };
+module.exports = { getCandles, putUpload, listMt5Files, TF_MS, parseMT4CSV, resample };

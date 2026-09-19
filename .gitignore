@@ -2,3 +2,4 @@ node_modules/
 data/mt5/
 gb_*.json
 *.log
+data/duel-*.json*

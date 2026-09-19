@@ -1,63 +1,53 @@
 //+------------------------------------------------------------------+
 //|                                            GoldPalBridge.mq5      |
 //|    One-shot history dumper for the GoldBrain dashboard (XM MT5).  |
-//|    Drop on a chart (or let Strategy Tester run once), it saves a  |
-//|    JSON file "XAUUSD_<TF>.json" into MQL5\Files\GoldBrain\.       |
-//|    Copy that file into <goldbrain>\data\mt5\ so the Node server   |
-//|    uses real XM MT5 data instead of Yahoo/demo.                   |
+//|    Drop on a chart (or let Strategy Tester run once), it saves    |
+//|    JSON files "XAUUSD_<TF>.json" (M1..D1 incl. M2) plus an        |
+//|    account.json (balance/equity/leverage) into MQL5\Files\        |
+//|    GoldBrain\. Copy those files into <goldbrain>\data\mt5\ and    |
+//|    refresh the dashboard - it then uses real MT5 data.            |
 //+------------------------------------------------------------------+
 #property copyright "GoldBrain"
 #property link      ""
-#property version   "1.00"
+#property version   "1.10"
 #property strict
-#property description "Exports API chart history to JSON for the GoldBrain dashboard."
+#property description "Exports API chart history + account info to JSON for the GoldBrain dashboard."
 
 input string      InpSymbol = "XAUUSD";   // symbol to export (XAUUSD on XM)
-input ENUM_TIMEFRAMES InpTf  = PERIOD_M1; // timeframe to export
-input int          InpBars   = 5000;     // bars to export (max available)
+input int          InpBars   = 2000;      // bars per timeframe
+input bool         InpAllTf  = true;      // dump M1..D1 in one run (incl M2)
 
-void OnTick() {}
-//+------------------------------------------------------------------+
-void OnStart()
+string Sym;
+
+void Dump(string tf, ENUM_TIMEFRAMES period)
   {
-   string sym = InpSymbol;
-   if(SymbolInfoInteger(sym, SYMBOL_SELECT) == 0)
+   if(SymbolInfoInteger(Sym, SYMBOL_SELECT) == 0)
      {
-      if(!SymbolSelect(sym, true))
+      if(!SymbolSelect(Sym, true))
         {
-         Print("Cannot select symbol ", sym);
+         Print("Cannot select symbol ", Sym);
          return;
         }
      }
-   int barsAvail = Bars(sym, InpTf);
+   int barsAvail = Bars(Sym, period);
    int bars = MathMin(InpBars, barsAvail);
    if(bars < 20)
      {
-      Print("Not enough bars for ", sym, " (got ", barsAvail, ")");
+      Print("Not enough bars for ", Sym, " ", tf, " (got ", barsAvail, ")");
       return;
      }
    MqlRates rates[];
    ArraySetAsSeries(rates, false);
-   int got = CopyRates(sym, InpTf, 0, bars, rates);
+   int got = CopyRates(Sym, period, 0, bars, rates);
    if(got < 20)
      {
-      Print("CopyRates failed: ", got, " error ", GetLastError());
+      Print("CopyRates failed: ", Sym, " ", tf, " got ", got, " error ", GetLastError());
       return;
      }
 
-   string tfName = EnumToString(InpTf);
-   string sub = StringSubstr(tfName, 6);           // e.g. "PERIOD_M1" -> "M1"
-   if(StringLen(sub) > 2 && StringContains(sub, "M")) sub = "M1"; // safety for PERIOD_M5 -> M5
-   if(StringCompare(sub,"1")==0) sub = "D1";
+   string outFile = StringFormat("GoldBrain\\%s_%s.json", Sym, tf);
 
-   string outFile = StringFormat("GoldBrain\\%s_%s.json", sym, sub);
-
-   string path = "GoldBrain";
-   if(FileIsExist(path))
-     {
-      // folder may already exist; files cleared below
-     }
-   string hist = "{\n  \"symbol\": \"" + sym + "\",\n  \"timeframe\": \"" + sub + "\",\n  \"candles\": [";
+   string hist = "{\n  \"symbol\": \"" + Sym + "\",\n  \"timeframe\": \"" + tf + "\",\n  \"candles\": [";
    string sep = "";
    for(int i = 0; i < got; i++)
      {
@@ -84,6 +74,66 @@ void OnStart()
    long sz = FileSize(handle);
    FileClose(handle);
    Print("GoldBrain bridge: wrote ", outFile, " (", got, " bars, ", sz, " bytes).");
-   Print("STEP: copy that file into the dashboard folder  data\\mt5\\  and refresh the page.");
+  }
+
+void DumpAccount()
+  {
+   string outFile = "GoldBrain\\account.json";
+   string acc = "{\n"
+      + "  \"login\": " + IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN)) + ",\n"
+      + "  \"server\": \"" + AccountInfoString(ACCOUNT_SERVER) + "\",\n"
+      + "  \"company\": \"" + AccountInfoString(ACCOUNT_COMPANY) + "\",\n"
+      + "  \"name\": \"" + AccountInfoString(ACCOUNT_NAME) + "\",\n"
+      + "  \"currency\": \"" + AccountInfoString(ACCOUNT_CURRENCY) + "\",\n"
+      + "  \"tradeMode\": " + IntegerToString((long)AccountInfoInteger(ACCOUNT_TRADE_MODE)) + ",\n"
+      + "  \"tradeAllowed\": " + IntegerToString((long)AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)) + ",\n"
+      + "  \"leverage\": " + IntegerToString((long)AccountInfoInteger(ACCOUNT_LEVERAGE)) + ",\n"
+      + "  \"balance\": " + DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 2) + ",\n"
+      + "  \"equity\": " + DoubleToString(AccountInfoDouble(ACCOUNT_EQUITY), 2) + ",\n"
+      + "  \"margin\": " + DoubleToString(AccountInfoDouble(ACCOUNT_MARGIN), 2) + ",\n"
+      + "  \"freeMargin\": " + DoubleToString(AccountInfoDouble(ACCOUNT_MARGIN_FREE), 2) + ",\n"
+      + "  \"time\": " + IntegerToString((long)TimeCurrent() * 1000) + "\n"
+      + "}\n";
+   int handle = FileOpen(outFile, FILE_WRITE | FILE_READ | FILE_TXT | FILE_ANSI);
+   if(handle == INVALID_HANDLE)
+     {
+      Print("Cannot write account.json, error ", GetLastError());
+      return;
+     }
+   FileWriteString(handle, acc);
+   FileClose(handle);
+   Print("GoldBrain bridge: wrote account.json");
+  }
+
+void OnTick() {}
+//+------------------------------------------------------------------+
+void OnStart()
+  {
+   Sym = InpSymbol;
+   int handle = FileOpen("GoldBrain\\probe.txt", FILE_WRITE | FILE_READ | FILE_TXT | FILE_ANSI);
+   if(handle != INVALID_HANDLE)
+     {
+      FileWriteString(handle, "ok");
+      FileClose(handle);
+      FileDelete("GoldBrain\\probe.txt");
+     }
+
+   if(InpAllTf)
+     {
+      Dump("M1",  PERIOD_M1);
+      Dump("M2",  PERIOD_M2);
+      Dump("M5",  PERIOD_M5);
+      Dump("M15", PERIOD_M15);
+      Dump("M30", PERIOD_M30);
+      Dump("H1",  PERIOD_H1);
+      Dump("H4",  PERIOD_H4);
+      Dump("D1",  PERIOD_D1);
+     }
+   else
+     {
+      Dump("M1", PERIOD_M1);
+     }
+   DumpAccount();
+   Print("STEP: copy those JSON files into the dashboard folder  data\\mt5\\  and refresh the page.");
   }
 //+------------------------------------------------------------------+
