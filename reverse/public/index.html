@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>GB REVERSE - XAUEUR counter / long-hold</title>
+<link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+<header>
+  <div class="brand">
+    <span class="logo">GB<span class="rev">R</span></span>
+    <div><div class="name">GoldBrain <b>REVERSE</b></div><div class="sub">XAUEUR · 0.01 lot · demo-first</div></div>
+  </div>
+  <div class="ctrls">
+    <select id="tf">
+      <option value="M5">M5</option>
+      <option value="M15" selected>M15</option>
+      <option value="H1">H1</option>
+      <option value="D1">D1</option>
+    </select>
+    <select id="bars">
+      <option value="300">300</option>
+      <option value="500" selected>500</option>
+      <option value="800">800</option>
+      <option value="1500">1500</option>
+    </select>
+    <label class="num">Bal <input id="balance" type="number" step="100" value="1000" /></label>
+    <label class="num">Risk% <input id="risk" type="number" step="0.25" min="0.05" value="1" /></label>
+    <button id="refresh" class="btn solid">Refresh</button>
+    <button id="aiplan" class="btn ghost">AI reverse plan</button>
+    <button id="keys" class="btn ghost" title="LLM key settings">Key</button>
+  </div>
+</header>
+
+<div class="strip">
+  <span class="px" id="px">–</span>
+  <span class="chg" id="chg"></span>
+  <span class="badge" id="src"></span>
+  <span id="struct"></span>
+  <span id="meta"></span>
+  <span class="spacer"></span>
+  <span id="updated"></span>
+</div>
+
+<main>
+  <section class="grid main-grid">
+    <div class="card chart-card">
+      <h3>XAUEUR price <span class="hint" id="chartHint"></span></h3>
+      <canvas id="chart" height="340"></canvas>
+    </div>
+
+    <div class="card dcard">
+      <h3>0.01-lot liquidation study <span class="hint" id="dtrials"></span></h3>
+      <div class="dstats" id="dstats"></div>
+      <canvas id="curve" height="120"></canvas>
+      <p class="tiny" id="dnote"></p>
+    </div>
+  </section>
+
+  <section class="grid two">
+    <div class="card">
+      <h3>REVERSE hold <span class="hint" id="rhState"></span></h3>
+      <div id="reverse"></div>
+    </div>
+    <div class="card">
+      <h3>AI reverse strategy <span class="hint" id="planSrc"></span></h3>
+      <div id="aiplan" class="plan"></div>
+    </div>
+  </section>
+
+  <section class="grid two">
+    <div class="card">
+      <h3>Careful strategy trades <span class="hint" id="stratSim"></span></h3>
+      <div class="tblwrap"><table id="stratTable"></table></div>
+    </div>
+    <div class="card">
+      <h3>Naive trial book (continuous) <span class="hint">victims being watched</span></h3>
+      <div class="tblwrap"><table id="bookTable"></table></div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  Educational tool. 0.01 lot model = EUR 1 per EUR 1.00 move in gold price.
+  D-certain is measured on this data, not promised. Backtests idealized (no slippage).
+  Never risk money you can't lose. Demo-first.
+</footer>
+
+<div class="modal" id="keyModal" hidden>
+  <div class="box">
+    <h3>LLM key (optional - the app works without one)</h3>
+    <p>Stored only in <code>data/config.json</code> on this PC (gitignored). The reverse plan works without a key - the local narrator writes it.</p>
+    <label>API key <input id="llmKey" type="password" placeholder="sk-...  or REASONER_API_KEY env" autocomplete="off" /></label>
+    <label>Base URL (optional) <input id="llmBase" type="text" placeholder="empty = provider default" /></label>
+    <label>Model (optional) <input id="llmModel" type="text" placeholder="empty = provider default" /></label>
+    <div class="row">
+      <button id="saveKey" class="btn solid">Save</button>
+      <button id="closeKey" class="btn ghost">Close</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

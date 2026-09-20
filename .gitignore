@@ -4,5 +4,6 @@ data/config.json
 data/news-cache.json
 data/reasoner-plan.json
 data/duel-*.json*
+data/reverse-state.json
 gb_*.json
 *.log
